@@ -31,6 +31,7 @@ from boss_state import (
     update_conversation_status,
     update_conversation_interest,
     update_conversation_wechat,
+    update_conversation_transfer_requested,
     increment_daily_stat,
     get_today_auto_reply_count,
     find_conversation_by_hr_name,
@@ -1997,6 +1998,7 @@ class BossAutomation(BossScraper):
         2. 扫描未读会话
         3. 对每个未读会话: 打开→读消息→存库→AI回复
         """
+        print("开始导航到聊天页面")
         result = {"checked": 0, "new_messages": 0, "replies_sent": 0}
 
         # 只在不在聊天页时才导航（避免每轮刷新页面，触发 BOSS 登录检查）
@@ -2293,7 +2295,12 @@ class BossAutomation(BossScraper):
                     resume = get_setting("resume_summary", "")
                     wechat = get_setting("wechat_id", "")
 
-                    reply, interest = generate_reply(conv_id, unreplied_hr_msg, job_info, style, resume, wechat)
+                    gen = generate_reply(conv_id, unreplied_hr_msg, job_info, style, resume, wechat)
+                    reply = gen["reply"]
+                    interest = gen.get("interest", "")
+                    if gen.get("transfer"):
+                        update_conversation_transfer_requested(conv_id)
+                        result["transfer_requested"] = True
                     if reply:
                         # 先执行发送操作（简历/微信/电话），确保AI说"已发送"时东西已经发出去了
                         msg_lower = unreplied_hr_msg.lower()

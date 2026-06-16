@@ -33,7 +33,7 @@ from playwright.sync_api import sync_playwright
 # 默认值
 # ============================================================
 
-DEFAULT_KEYWORDS = ["AI应用开发", "人工智能工程师", "算法工程师", "大模型开发"]
+DEFAULT_KEYWORDS = ["Python开发", "前端开发", "产品经理", "数据分析"]
 DEFAULT_SALARY_MIN = 15
 DEFAULT_SALARY_MAX = 25
 DEFAULT_EXP_MIN = 1
@@ -121,7 +121,7 @@ def load_config():
 # 智联招聘 爬虫
 # ============================================================
 
-def scrape_zhaopin(keyword="AI应用开发", max_jobs=50):
+def scrape_zhaopin(keyword="Python开发", max_jobs=50):
     """去智联招聘搜岗位，返回列表（多页）"""
     all_jobs = []
     

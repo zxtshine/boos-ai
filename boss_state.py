@@ -158,6 +158,14 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     try:
+        db.execute("ALTER TABLE conversations ADD COLUMN transfer_requested INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        db.execute("ALTER TABLE conversations ADD COLUMN transfer_requested_at TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
+    try:
         db.execute("ALTER TABLE applications ADD COLUMN company_id TEXT")
     except sqlite3.OperationalError:
         pass
@@ -177,6 +185,27 @@ def init_db():
         db.execute("ALTER TABLE applications ADD COLUMN is_boss INTEGER DEFAULT 0")
     except sqlite3.OperationalError:
         pass
+    try:
+        db.execute("ALTER TABLE applications ADD COLUMN embedding TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    # 面试会话持久化（支持暂停/恢复）
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS interview_sessions (
+            session_id TEXT PRIMARY KEY,
+            job_focus TEXT DEFAULT '',
+            job_context TEXT DEFAULT '',
+            resume TEXT DEFAULT '',
+            round_count INTEGER DEFAULT 0,
+            max_rounds INTEGER DEFAULT 10,
+            history_json TEXT DEFAULT '[]',
+            last_question TEXT DEFAULT '',
+            last_category TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
     # 候选池表
     db.executescript("""
         CREATE TABLE IF NOT EXISTS shortlists (
@@ -205,7 +234,7 @@ def init_db():
         "batch_rest_every": "8",
         "resume_summary": "",
         "wechat_id": "",
-        "search_keywords": "AI Agent,大模型开发,AI产品经理,RAG开发,大模型应用",
+        "search_keywords": "",
         "default_city": "淄博",
     }
     for k, v in defaults.items():
@@ -458,6 +487,64 @@ def company_already_applied(company: str = "", company_id: str = "") -> bool:
     return False
 
 
+def save_job_embedding(job_url: str, embedding: list):
+    """存储 JD 的 embedding 向量（JSON 格式）。"""
+    import json
+    db = get_db()
+    db.execute(
+        "UPDATE applications SET embedding=? WHERE job_url=?",
+        (json.dumps(embedding, ensure_ascii=False), job_url),
+    )
+    db.commit()
+
+
+def get_all_job_embeddings() -> list:
+    """返回所有已存储 embedding 的岗位摘要 + HR 反馈信号。
+
+    每条返回: {job_url, job_title, company, description, embedding, optimize_result,
+               chat_suggestion_result, greeting_text, status, interest_level, resume_sent,
+               wechat_shared}
+    embedding 从 JSON 反序列化为 list[float]。
+    """
+    import json
+    db = get_db()
+    rows = db.execute(
+        """SELECT a.job_url, a.job_title, a.company, a.description, a.embedding,
+                  a.optimize_result, a.chat_suggestion_result, a.greeting_text, a.status,
+                  c.interest_level, c.resume_sent, c.hr_wechat, c.wechat_shared_at
+           FROM applications a
+           LEFT JOIN conversations c ON c.application_id = a.id
+           WHERE a.embedding IS NOT NULL AND a.embedding != ''
+           ORDER BY a.id DESC""",
+    ).fetchall()
+    result = []
+    for r in rows:
+        emb_str = r["embedding"]
+        if not emb_str:
+            continue
+        try:
+            emb = json.loads(emb_str)
+        except Exception:
+            continue
+        if not emb or len(emb) < 16:
+            continue
+        result.append({
+            "job_url": r["job_url"],
+            "job_title": r["job_title"],
+            "company": r["company"],
+            "description": (r["description"] or "")[:500],
+            "embedding": emb,
+            "optimize_result": r["optimize_result"] or "",
+            "chat_suggestion_result": r["chat_suggestion_result"] or "",
+            "greeting_text": r["greeting_text"] or "",
+            "status": r["status"] or "",
+            "interest_level": r["interest_level"] or "",
+            "resume_sent": bool(r["resume_sent"]),
+            "wechat_shared": bool(r["hr_wechat"] and r["wechat_shared_at"]),
+        })
+    return result
+
+
 # ══════════════════════════════════════
 #  Conversations
 # ══════════════════════════════════════
@@ -562,6 +649,31 @@ def get_wechat_exchanges() -> List[dict]:
                LEFT JOIN applications a ON c.application_id = a.id
                WHERE c.hr_wechat IS NOT NULL AND c.hr_wechat != ''
                ORDER BY c.wechat_shared_at DESC"""
+        )
+        .fetchall()
+    )
+
+
+def update_conversation_transfer_requested(conv_id: int):
+    get_db().execute(
+        "UPDATE conversations SET transfer_requested=1, transfer_requested_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (conv_id,),
+    )
+    get_db().commit()
+
+
+def get_transfer_requests() -> List[dict]:
+    """返回所有转人工请求的会话，包含岗位详情。"""
+    return _rows_to_list(
+        get_db()
+        .execute(
+            """SELECT c.id, c.hr_name, c.hr_company, c.job_title, c.last_message_text,
+                      c.transfer_requested_at, c.interest_level,
+                      a.city, a.salary, a.experience, a.education, a.description
+               FROM conversations c
+               LEFT JOIN applications a ON c.application_id = a.id
+               WHERE c.transfer_requested = 1
+               ORDER BY c.transfer_requested_at DESC"""
         )
         .fetchall()
     )
@@ -756,6 +868,66 @@ def list_shortlists(limit: int = 100) -> list:
 def is_in_shortlist(job_url: str) -> bool:
     row = get_db().execute("SELECT COUNT(*) as cnt FROM shortlists WHERE job_url=?", (job_url,)).fetchone()
     return row["cnt"] > 0 if row else False
+
+
+# ══════════════════════════════════════
+#  面试会话持久化
+# ══════════════════════════════════════
+
+def save_interview_session(
+    session_id: str,
+    job_focus: str = "",
+    job_context: str = "",
+    resume: str = "",
+    round_count: int = 0,
+    max_rounds: int = 10,
+    history_json: str = "[]",
+    last_question: str = "",
+    last_category: str = "",
+    status: str = "active",
+):
+    db = get_db()
+    db.execute(
+        """INSERT OR REPLACE INTO interview_sessions
+           (session_id, job_focus, job_context, resume, round_count, max_rounds,
+            history_json, last_question, last_category, status, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+        (session_id, job_focus, job_context, resume, round_count, max_rounds,
+         history_json, last_question, last_category, status),
+    )
+    db.commit()
+
+
+def get_interview_session(session_id: str) -> dict | None:
+    row = get_db().execute(
+        "SELECT * FROM interview_sessions WHERE session_id=?", (session_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def list_active_interview_sessions() -> list:
+    rows = get_db().execute(
+        "SELECT session_id, job_focus, round_count, status, created_at, updated_at "
+        "FROM interview_sessions WHERE status='active' ORDER BY updated_at DESC"
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+def list_all_interview_sessions() -> list:
+    rows = get_db().execute(
+        "SELECT session_id, job_focus, round_count, status, created_at, updated_at "
+        "FROM interview_sessions ORDER BY updated_at DESC"
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+def mark_interview_ended(session_id: str):
+    db = get_db()
+    db.execute(
+        "UPDATE interview_sessions SET status='ended', updated_at=CURRENT_TIMESTAMP WHERE session_id=?",
+        (session_id,),
+    )
+    db.commit()
 
 
 # 启动时初始化

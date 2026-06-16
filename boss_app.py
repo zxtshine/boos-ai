@@ -46,6 +46,7 @@ from boss_state import (
     get_all_settings,
     get_daily_stats,
     get_wechat_exchanges,
+    get_transfer_requests,
     get_today_pending_count,
     count_hours_replied_in_range,
     count_interest_level,
@@ -59,6 +60,8 @@ from boss_state import (
 )
 from boss_replier import generate_greeting, generate_greeting_ai
 from boss_company import build_company_preview, rank_companies_by_position_count
+from agent.tools import ToolRegistry, ToolContext, register_all
+from agent.loop import AgentLoop
 
 # ── FastAPI 应用 ──
 app = FastAPI(title="BOSS直聘自动化控制台", version="1.0.0")
@@ -83,6 +86,7 @@ monitor_paused: bool = False
 browser_sync_lock: Optional[asyncio.Lock] = None
 _cached_zp_headers: dict = {}  # zp_token + token + Cookie，geo 端点免 _run_pw
 _HEADERS_CACHE_TTL = 15 * 60  # 15 分钟
+interview_sessions: dict = {}  # session_id → InterviewEngine
 
 
 def _refresh_zp_cache():
@@ -337,7 +341,7 @@ def _clean_messages_for_web(messages: List[dict]) -> List[dict]:
 
 
 class SearchRequest(BaseModel):
-    keyword: str = "AI Agent"
+    keyword: str = ""
     city: str = ""
     welfare: Optional[str] = None
     limit: int = 60
@@ -404,6 +408,7 @@ class SettingsUpdate(BaseModel):
     dedup_company_by_default: Optional[str] = None  # 默认公司去重
     conversation_cooldown_sec: Optional[str] = None  # 会话冷却时间
     reply_rules_system_prompt: Optional[str] = None  # 回复规则 prompt
+    debug_llm_context: Optional[str] = None  # LLM 上下文调试日志
 
 
 class CompanyPreviewRequest(BaseModel):
@@ -422,6 +427,26 @@ class SmartSendRequest(BaseModel):
     greeting: Optional[str] = ""
     confirm: bool = False
     targets: Optional[list] = None  # [{company, job_url, hr_name, hr_title}, ...]
+
+
+class AgentRunRequest(BaseModel):
+    goal: str
+    max_steps: int = 12
+    auto_execute: bool = True  # False = dry-run，只规划不执行（预留）
+
+
+class InterviewStartRequest(BaseModel):
+    job_url: Optional[str] = ""
+    job_focus: Optional[str] = ""
+
+
+class InterviewAnswerRequest(BaseModel):
+    session_id: str
+    answer: str
+
+
+class InterviewSessionRequest(BaseModel):
+    session_id: str
 
 
 # ══════════════════════════════════════
@@ -1585,8 +1610,19 @@ async def optimize_resume(req: OptimizeResumeRequest):
             except Exception:
                 pass
 
+    # RAG: 检索历史相似JD经验
+    from boss_rag import similar_jds, build_rag_context, ensure_jd_embedding
+    desc = desc.strip()
+    if desc and req.job_url:
+        ensure_jd_embedding(req.job_url, desc)
+    rag_context = ""
+    if desc:
+        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "")
+        rag_context = build_rag_context(similar, "optimize")
+
     prompt = f"""你是站在求职者一侧的简历审计官和优化专家。根据以下岗位JD，生成简历优化建议。
 
+{rag_context}
 ## 岗位信息
 - 公司: {company}
 - 职位: {title}
@@ -1706,6 +1742,16 @@ async def chat_suggestion(req: ChatSuggestionRequest):
 
     resume = get_setting("resume_summary", "")
 
+    # RAG: 检索历史相似JD经验
+    from boss_rag import similar_jds, build_rag_context, ensure_jd_embedding
+    desc = desc.strip()
+    if desc and req.job_url:
+        ensure_jd_embedding(req.job_url, desc)
+    rag_context = ""
+    if desc:
+        similar = similar_jds(desc, limit=3, exclude_url=req.job_url or "")
+        rag_context = build_rag_context(similar, "chat")
+
     boss_hint = "对方很可能是公司老板/法人本人，语气要更诚意、更直接" if is_boss else ""
     hr_ctx = f"HR姓名: {hr_name}" + (f"，头衔: {hr_title}" if hr_title else "")
     if is_boss and hr_name:
@@ -1713,6 +1759,7 @@ async def chat_suggestion(req: ChatSuggestionRequest):
 
     prompt = f"""你是求职沟通教练，帮求职者生成和 HR 的沟通策略。
 
+{rag_context}
 ## 岗位信息
 - 公司: {company}
 - 职位: {title}
@@ -1822,6 +1869,13 @@ def list_wechat_exchanges():
     """返回所有已获取到 HR 微信号的会话。"""
     records = get_wechat_exchanges()
     return {"exchanges": records}
+
+
+@app.get("/api/transfer-requests")
+def list_transfer_requests():
+    """返回所有 HR 要求转人工的会话。"""
+    records = get_transfer_requests()
+    return {"requests": records}
 
 
 @app.get("/api/conversations")
@@ -2167,6 +2221,525 @@ async def update_settings(req: SettingsUpdate):
 
 
 # ══════════════════════════════════════
+#  模拟面试 — AI 对话式面试
+# ══════════════════════════════════════
+
+
+@app.post("/api/interview/start")
+async def interview_start(req: InterviewStartRequest):
+    """启动模拟面试，生成开场白 + 第一道题（对话式）。"""
+    import sys, os
+    sys.path.insert(0, str(Path(__file__).parent / "interview"))
+    from engine import InterviewEngine
+
+    # 检查 AI Key
+    try:
+        from llm_client import _load_ai_config
+        cfg = _load_ai_config()
+        if not cfg.get("api_key") or len(cfg["api_key"]) < 10:
+            raise HTTPException(status_code=400, detail="AI API Key 未配置")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # 从岗位 URL 读取岗位信息作为面试上下文
+    job_focus = req.job_focus or ""
+    job_title = ""
+    job_desc = ""
+    if req.job_url and not job_focus:
+        try:
+            from boss_state import get_application_by_url
+            job = get_application_by_url(req.job_url)
+            if job:
+                job_title = job.get("job_title") or job.get("title") or ""
+                job_desc = (job.get("description") or "")[:500]
+                if job_title:
+                    job_focus = job_title
+                if job_desc:
+                    job_focus = f"{job_title} —— {job_desc[:120]}"
+        except Exception:
+            pass
+
+    # 读取是否使用本地模型
+    use_local = get_setting("use_local_model", "false") == "true"
+
+    engine = InterviewEngine(job_focus=job_focus or "", use_local_model=use_local)
+    try:
+        result = engine.start()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成面试题失败: {e}")
+
+    interview_sessions[engine.session_id] = engine
+
+    return {
+        "session_id": engine.session_id,
+        "message": result["message"],
+        "question_count": result["question_count"],
+        "job_title": job_title,
+    }
+
+
+@app.post("/api/interview/answer")
+async def interview_answer(req: InterviewAnswerRequest):
+    """对话式面试：提交回答，获取面试官回复（评价 + 追问）。"""
+    engine = interview_sessions.get(req.session_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    if not req.answer.strip():
+        raise HTTPException(status_code=400, detail="回答不能为空")
+
+    try:
+        reply = engine.chat(req.answer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"处理失败: {e}")
+
+    return reply
+
+
+@app.post("/api/interview/skip")
+async def interview_skip(req: InterviewSessionRequest):
+    """跳过当前话题，让面试官换个方向提问。"""
+    engine = interview_sessions.get(req.session_id)
+    if not engine:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    try:
+        reply = engine.chat("我想跳过这个话题，请换一个方向提问")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"跳过失败: {e}")
+
+    return reply
+
+
+@app.post("/api/interview/end")
+async def interview_end(req: InterviewSessionRequest):
+    """结束面试，生成总结。"""
+    engine = interview_sessions.pop(req.session_id, None)
+    if not engine:
+        raise HTTPException(status_code=404, detail="会话不存在或已过期")
+
+    try:
+        summary = engine.end_session()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成总结失败: {e}")
+
+    return {"summary": summary}
+
+
+@app.get("/api/interview/sessions")
+def interview_list_sessions():
+    """列出所有已保存的面试会话（含进行中和已结束）。"""
+    try:
+        from boss_state import list_all_interview_sessions as _list
+        return {"sessions": _list()}
+    except Exception as e:
+        return {"sessions": [], "error": str(e)}
+
+
+@app.post("/api/interview/resume")
+async def interview_resume(req: InterviewSessionRequest):
+    """恢复一个进行中的面试会话，接着上次的对话继续。"""
+    from boss_state import get_interview_session as _get
+
+    saved = _get(req.session_id)
+    if not saved:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if saved.get("status") != "active":
+        raise HTTPException(status_code=400, detail="该会话已结束，不能继续")
+
+    # 检查是否已存在于内存中
+    engine = interview_sessions.get(req.session_id)
+    if not engine:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, str(Path(__file__).parent / "interview"))
+        from engine import InterviewEngine
+        use_local = get_setting("use_local_model", "false") == "true"
+        engine = InterviewEngine.from_saved(saved, use_local_model=use_local)
+        interview_sessions[req.session_id] = engine
+
+    return {
+        "session_id": engine.session_id,
+        "message": engine._last_question,
+        "question_count": engine.round_count,
+        "history": engine.history,
+    }
+
+
+# ══════════════════════════════════════
+#  知识库批量导入
+# ══════════════════════════════════════
+
+@app.post("/api/qa/import-questions")
+async def qa_import_questions(data: dict):
+    """批量导入面试题（仅问题，LLM 自动生成答案）"""
+    import sys, os, time
+    from datetime import datetime
+    ts = lambda: datetime.now().strftime('%H:%M:%S')
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "interview"))
+    from db import add_qa_pair
+    from llm_client import llm_chat_deepseek, llm_chat_ollama
+
+    category = data.get("category", "通用")
+    text = (data.get("text") or "").strip()
+    difficulty = data.get("difficulty", "medium")
+    skills = data.get("skills", "")
+
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+
+    questions = [q.strip() for q in text.split("\n") if q.strip()]
+    if not questions:
+        raise HTTPException(status_code=400, detail="未解析到有效问题")
+
+    if len(questions) > 50:
+        raise HTTPException(status_code=400, detail="单次最多导入 50 条")
+
+    print(f"\n[{ts()}] ═══ 开始批量导入（仅问题模式） ═══")
+    print(f"[{ts()}] 分类: {category} | 难度: {difficulty} | 技能: {skills or '无'}")
+    print(f"[{ts()}] 待导入: {len(questions)} 题")
+
+    imported, failed = 0, 0
+    t_total = time.time()
+    for i, q in enumerate(questions, 1):
+        t_item = time.time()
+        print(f"[{ts()}] [{i}/{len(questions)}] 📝 {q[:60]}{'...' if len(q)>60 else ''}")
+        try:
+            # 调 LLM 生成答案
+            prompt = f"你是一位资深面试官。请用中文简洁、专业地回答以下面试题（200-400字内），给出核心要点和技术细节：\n\n{q}"
+            t_llm = time.time()
+            try:
+                answer = llm_chat_deepseek([{"role": "user", "content": prompt}], temperature=0.3)
+                print(f"[{ts()}]   ├─ ☁️ 答案生成完成 (DeepSeek, {time.time()-t_llm:.1f}s, {len(answer)}字)")
+            except Exception:
+                answer = llm_chat_ollama([{"role": "user", "content": prompt}], temperature=0.3)
+                print(f"[{ts()}]   ├─ 🤖 答案生成完成 (Ollama, {time.time()-t_llm:.1f}s, {len(answer)}字)")
+
+            t_db = time.time()
+            add_qa_pair(category, q, answer, difficulty, skills)
+            imported += 1
+            print(f"[{ts()}]   └─ ✅ 写入数据库 (embedding+insert {time.time()-t_db:.1f}s, 总耗时 {time.time()-t_item:.1f}s)")
+        except Exception as e:
+            failed += 1
+            print(f"[{ts()}]   └─ ❌ 失败: {e}")
+
+    elapsed = time.time() - t_total
+    print(f"[{ts()}] ═══ 导入完成: 成功 {imported}, 失败 {failed}, 总耗时 {elapsed:.1f}s ═══\n")
+
+    return {"imported": imported, "failed": failed, "total": len(questions)}
+
+
+@app.post("/api/qa/import-pairs")
+async def qa_import_pairs(data: dict):
+    """批量导入面试题（问题+答案，从文本解析）"""
+    import sys, os, time
+    from datetime import datetime
+    ts = lambda: datetime.now().strftime('%H:%M:%S')
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "interview"))
+    from db import add_qa_pair
+
+    category = data.get("category", "通用")
+    text = (data.get("text") or "").strip()
+    difficulty = data.get("difficulty", "medium")
+    skills = data.get("skills", "")
+
+    if not text:
+        raise HTTPException(status_code=400, detail="文本不能为空")
+
+    # 解析 Q&A 对，支持格式：Q:... \n A:... 或 问：... \n 答：... 或 --- 分隔
+    pairs = _parse_qa_text(text)
+    if not pairs:
+        raise HTTPException(status_code=400, detail="未解析到有效 Q&A 对，请使用格式：Q:问题\\nA:答案")
+
+    if len(pairs) > 50:
+        raise HTTPException(status_code=400, detail="单次最多导入 50 条")
+
+    print(f"\n[{ts()}] ═══ 开始批量导入（Q&A 模式） ═══")
+    print(f"[{ts()}] 分类: {category} | 难度: {difficulty} | 技能: {skills or '无'}")
+    print(f"[{ts()}] 待导入: {len(pairs)} 题")
+
+    imported, failed = 0, 0
+    t_total = time.time()
+    for i, (q, a) in enumerate(pairs, 1):
+        t_item = time.time()
+        print(f"[{ts()}] [{i}/{len(pairs)}] 📝 {q[:60]}{'...' if len(q)>60 else ''}")
+        try:
+            add_qa_pair(category, q, a, difficulty, skills)
+            imported += 1
+            print(f"[{ts()}]   └─ ✅ 写入数据库 (embedding+insert {time.time()-t_item:.1f}s)")
+        except Exception as e:
+            failed += 1
+            print(f"[{ts()}]   └─ ❌ 失败: {e}")
+
+    elapsed = time.time() - t_total
+    print(f"[{ts()}] ═══ 导入完成: 成功 {imported}, 失败 {failed}, 总耗时 {elapsed:.1f}s ═══\n")
+
+    return {"imported": imported, "failed": failed, "total": len(pairs)}
+
+
+def _parse_qa_text(text: str):
+    """从文本中解析 Q&A 对"""
+    pairs = []
+    # 尝试 Q:...A:... 格式
+    if re.search(r'^Q\s*[:：]', text, re.MULTILINE | re.IGNORECASE):
+        blocks = re.split(r'\n(?=Q\s*[:：])', text, flags=re.MULTILINE | re.IGNORECASE)
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            parts = re.split(r'\nA\s*[:：]', block, maxsplit=1, flags=re.IGNORECASE)
+            if len(parts) == 2:
+                q = re.sub(r'^Q\s*[:：]\s*', '', parts[0], flags=re.IGNORECASE).strip()
+                a = parts[1].strip()
+                if q and a:
+                    pairs.append((q, a))
+        if pairs:
+            return pairs
+
+    # 尝试 问：...答：... 格式
+    if re.search(r'^问\s*[:：]', text, re.MULTILINE):
+        blocks = re.split(r'\n(?=问\s*[:：])', text, flags=re.MULTILINE)
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            parts = re.split(r'\n答\s*[:：]', block, maxsplit=1)
+            if len(parts) == 2:
+                q = re.sub(r'^问\s*[:：]\s*', '', parts[0]).strip()
+                a = parts[1].strip()
+                if q and a:
+                    pairs.append((q, a))
+        if pairs:
+            return pairs
+
+    # 尝试 --- 分隔的格式
+    blocks = re.split(r'\n---+\n', text)
+    if len(blocks) >= 2:
+        for block in blocks:
+            block = block.strip()
+            if not block:
+                continue
+            lines = block.strip().split("\n")
+            # 第一行是问题，后面是答案
+            if len(lines) >= 2:
+                q = lines[0].strip()
+                a = "\n".join(lines[1:]).strip()
+                if q and a:
+                    pairs.append((q, a))
+        if pairs:
+            return pairs
+
+    return pairs
+
+
+@app.get("/api/qa/categories")
+async def qa_categories():
+    """获取知识库分类统计"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "interview"))
+    from db import get_conn
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT category, COUNT(*) as cnt FROM interview_qa_pairs GROUP BY category ORDER BY cnt DESC")
+            rows = cur.fetchall()
+            categories = [f"{r['category']}({r['cnt']})" for r in rows]
+            return {"qa_categories": categories, "total": sum(r["cnt"] for r in rows)}
+    except Exception:
+        return {"qa_categories": [], "total": 0}
+    finally:
+        conn.close()
+
+# ══════════════════════════════════════
+#  面试回顾 — 历史记录 & 弱项分析
+# ══════════════════════════════════════
+
+@app.get("/api/review/sessions")
+def api_review_sessions():
+    """获取所有面试会话列表（含状态、轮次、岗位方向）。"""
+    sessions_map = {}  # session_id → metadata
+
+    # 1. 从 SQLite 拉会话元数据（含 status, round_count, job_focus）
+    try:
+        from boss_state import list_all_interview_sessions as _list
+        for s in _list():
+            sid = s["session_id"]
+            sessions_map[sid] = {
+                "session_id": sid,
+                "job_focus": s.get("job_focus", ""),
+                "round_count": s.get("round_count", 0),
+                "status": s.get("status", "active"),
+                "created_at": s.get("created_at", ""),
+                "updated_at": s.get("updated_at", ""),
+                "question_count": 0,
+            }
+    except Exception as e:
+        pass  # SQLite 不可用时退回纯 MySQL
+
+    # 2. 从 MySQL 补问题数
+    try:
+        from interview.db import get_all_session_ids, get_session_summary
+        mysql_sids = get_all_session_ids()
+        for sid in mysql_sids:
+            try:
+                summary = get_session_summary(sid)
+                qc = summary.get("total_questions", 0)
+            except Exception:
+                qc = 0
+            if sid in sessions_map:
+                sessions_map[sid]["question_count"] = qc
+            else:
+                sessions_map[sid] = {
+                    "session_id": sid,
+                    "job_focus": "",
+                    "round_count": qc,
+                    "status": "ended",
+                    "created_at": "",
+                    "updated_at": "",
+                    "question_count": qc,
+                }
+    except Exception:
+        pass
+
+    return {"sessions": list(sessions_map.values())}
+
+
+@app.get("/api/review/session/{session_id}")
+def api_review_session(session_id: str):
+    """获取某个面试会话的详细记录。"""
+    try:
+        from interview.db import get_session_summary
+        return get_session_summary(session_id)
+    except Exception as e:
+        return {"session_id": session_id, "total_questions": 0, "error": str(e)}
+
+
+@app.get("/api/review/weak-areas")
+def api_review_weak_areas(limit: int = 10):
+    """薄弱环节分析 — 得分最低的题目 + 各类别均分。"""
+    try:
+        from interview.db import get_weak_areas, get_category_scores
+        areas = get_weak_areas(limit)
+        cat_scores = get_category_scores()
+        return {"weak_areas": areas, "category_scores": cat_scores}
+    except Exception as e:
+        return {"weak_areas": [], "category_scores": [], "error": str(e)}
+
+
+# ══════════════════════════════════════
+#  Agent — ReAct 自主求职智能体
+# ══════════════════════════════════════
+
+
+@app.get("/api/agent/tools")
+def agent_list_tools():
+    """列出 Agent 可用的所有工具。"""
+    registry = ToolRegistry()
+    ToolContext.init(automation=automation, run_pw=_run_pw)
+    register_all(registry)
+    return {
+        "tools": [
+            {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}
+            for t in registry.get_openai_schema()
+        ]
+    }
+
+
+@app.post("/api/agent/run")
+async def agent_run(req: AgentRunRequest):
+    """启动 ReAct Agent 自主执行求职任务。
+
+    Agent 会根据 goal 自主决策：搜索 → 分析 → 筛选 → 投递 → 总结。
+    每步进度通过 WebSocket 实时推送（type: agent_step）。
+    """
+    global monitor_paused
+
+    if not req.goal or len(req.goal.strip()) < 5:
+        raise HTTPException(status_code=400, detail="goal 太短，请描述你的求职目标")
+
+    # 检查 AI Key
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "interview"))
+        from llm_client import _load_ai_config
+
+        cfg = _load_ai_config()
+        if not cfg.get("api_key") or len(cfg["api_key"]) < 10:
+            raise HTTPException(status_code=400, detail="AI API Key 未配置，请先在设置页配置")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # 暂停监控循环，避免和 Agent 冲突
+    was_paused = monitor_paused
+    monitor_paused = True
+    # 等待当前监控循环安全退出（最长等 10 秒）
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        if browser_sync_lock is None or not browser_sync_lock.locked():
+            break
+
+    try:
+        # 构建 ToolRegistry
+        ToolContext.init(automation=automation, run_pw=_run_pw)
+        registry = ToolRegistry()
+        register_all(registry)
+
+        # LLM 调用适配器
+        def _agent_llm_chat(messages: list, temperature: float = 0.3) -> str:
+            sys.path.insert(0, str(Path(__file__).parent / "interview"))
+            from llm_client import llm_chat_deepseek
+
+            return llm_chat_deepseek(messages, temperature=temperature)
+
+        # 每步回调：推送到 WebSocket
+        async def _on_step(step_record: dict):
+            await broadcast_ws({
+                "type": "agent_step",
+                "step": step_record.get("step"),
+                "thought": step_record.get("thought", ""),
+                "tool": step_record.get("tool", ""),
+                "args": step_record.get("args", {}),
+                "result_preview": (step_record.get("result") or "")[:200],
+            })
+
+        # 创建并运行 Agent
+        loop = AgentLoop(
+            registry=registry,
+            llm_chat=_agent_llm_chat,
+            goal=req.goal.strip(),
+            max_steps=req.max_steps,
+            on_step=_on_step,
+        )
+
+        await broadcast_ws({
+            "type": "agent_started",
+            "goal": req.goal,
+            "max_steps": req.max_steps,
+        })
+
+        result = await loop.run()
+
+        await broadcast_ws({
+            "type": "agent_complete",
+            "steps": result.get("steps", 0),
+            "summary": result.get("summary", "")[:500],
+        })
+
+        return result
+
+    except Exception as e:
+        await broadcast_ws({
+            "type": "agent_error",
+            "message": str(e),
+        })
+        raise HTTPException(status_code=500, detail=f"Agent 执行失败: {e}")
+    finally:
+        monitor_paused = was_paused
+
+
+# ══════════════════════════════════════
 #  WebSocket
 # ══════════════════════════════════════
 
@@ -2228,16 +2801,21 @@ async def chat_monitor_loop():
         print(f"[监控] ⚠️ AI 回复系统加载失败: {e}")
 
     # 首次立即跑一轮监控，不等延迟
-    if automation:
+    if automation and not monitor_paused:
         print("[监控] 执行首次会话扫描...")
         try:
-            result = await _run_pw(automation.run_chat_monitor_cycle)
+            if browser_sync_lock is None:
+                browser_sync_lock = asyncio.Lock()
+            async with browser_sync_lock:
+                result = await _run_pw(automation.run_chat_monitor_cycle)
             if result.get("new_messages", 0) > 0:
                 await broadcast_ws({"type": "new_messages", "summary": result})
             if result.get("replies_sent", 0) > 0:
                 await broadcast_ws({"type": "auto_reply_sent", "summary": result})
             if result.get("new_conversations"):
                 await broadcast_ws({"type": "new_messages"})
+            if result.get("transfer_requested"):
+                await broadcast_ws({"type": "transfer_requested"})
         except Exception as e:
             print(f"  [监控] 首次扫描异常: {e}")
 
@@ -2291,7 +2869,10 @@ async def chat_monitor_loop():
             if get_setting("auto_reply_enabled", "false") != "true":
                 continue
 
-            result = await _run_pw(automation.run_chat_monitor_cycle)
+            if browser_sync_lock is None:
+                browser_sync_lock = asyncio.Lock()
+            async with browser_sync_lock:
+                result = await _run_pw(automation.run_chat_monitor_cycle)
 
             # 每轮监控后刷新 zp headers 缓存，供 geo 端点使用
             try:
@@ -2317,6 +2898,8 @@ async def chat_monitor_loop():
                 await broadcast_ws({"type": "new_messages"})
             if result.get("wechat_exchanged"):
                 await broadcast_ws({"type": "wechat_exchanged"})
+            if result.get("transfer_requested"):
+                await broadcast_ws({"type": "transfer_requested"})
 
             safety_ok = await _run_pw(automation.check_page_safety)
             if not safety_ok:

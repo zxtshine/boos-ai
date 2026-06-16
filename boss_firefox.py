@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BOSS直聘 AI Agent 岗位采集工具
+BOSS直聘 岗位采集工具
 
 流程:
   1. 搜索列表页 → 提取基本信息（标题、薪资、公司、城市、经验、学历、链接）
@@ -72,12 +72,12 @@ TODAY = date.today().isoformat()
 DATE_STR = date.today().strftime("%Y-%m-%d")
 
 KEYWORDS = [
-    "AI Agent",
-    "AI产品经理",
-    "电商",
-    "机械",
-    "化工",
-    "外贸",
+    "Python后端",
+    "前端开发",
+    "产品经理",
+    "数据分析",
+    "机械设计",
+    "电商运营",
 ]
 
 # BOSS直聘城市代码
@@ -1407,7 +1407,7 @@ def output_report(jobs):
 
 
 def skill_report(gap):
-    lines = ["# AI Agent 技能差距分析报告 · %s\n" % DATE_STR]
+    lines = ["# 技能差距分析报告 · %s\n" % DATE_STR]
     lines.append("> 基于 BOSS 直聘 %d 个岗位\n---\n" % gap["total"])
     lines.append("## 一、✅ 你已拥有的技能\n")
     for item in gap["have"]:

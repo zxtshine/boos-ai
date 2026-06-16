@@ -9,21 +9,12 @@ V2改进：
 """
 
 import json, time, re
+from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
-import pymysql
 import numpy as np
 
 from llm_client import get_embedding, cosine_similarity
-
-DB_CONFIG = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": "wu1364382646",
-    "database": "ai_jobs_db",
-    "charset": "utf8mb4",
-    "cursorclass": pymysql.cursors.DictCursor,
-}
+from mysql_config import get_conn
 
 SEMANTIC_MATCH_THRESHOLD = 0.65
 
@@ -62,127 +53,89 @@ query_cache = LRUCache(capacity=200)
 
 # 每个话题域的代表性描述（用于embedding分类）
 TOPIC_DESCRIPTIONS = {
-    "Prompt Engineering": "提示词工程 prompt engineering 设计技巧 思维链 few-shot chain-of-thought 角色设定 结构化输出 指令设计",
-    "RAG": "RAG 检索增强生成 知识库 向量检索 embedding chunk 分块 重排序 rerank BM25 混合检索 HyDE 知识图谱 GraphRAG CRAG Self-RAG 缓存 文档 多模态 召回率 评估",
-    "Agent": "AI Agent 智能体 多智能体 ReAct tool use function calling 记忆 memory 规划 planning LangGraph AutoGen CrewAI MCP 工具调用",
-    "大模型": "大模型 LLM Transformer 注意力机制 微调 LoRA 量化 推理加速 训练 预训练 SFT RLHF DPO 模型评估 幻觉",
-    "工程化": "工程化 部署 FastAPI Docker 流式输出 监控 日志 CI/CD 限流 安全 容器编排 GPU 成本",
-    "Python": "Python 异步 asyncio Pydantic 装饰器 类型提示 协程 生成器",
+    "编程语言": "Python Java Go Rust C++ TypeScript JavaScript 语法 特性 异步 多线程 并发 内存管理 泛型 装饰器 协程",
+    "数据库": "MySQL Redis PostgreSQL MongoDB Elasticsearch SQL 索引 事务 分库分表 NoSQL 缓存 查询优化 ACID",
+    "系统设计": "架构 分布式 微服务 消息队列 设计模式 高并发 高可用 CAP 负载均衡 领域驱动 DDD RESTful GraphQL",
+    "工程化": "Docker K8s 部署 CI/CD 监控 日志 测试 性能优化 限流 安全 容器编排 自动化 运维",
+    "前端": "React Vue Angular CSS HTML 响应式 SSR 跨域 小程序 浏览器API WebAssembly 状态管理",
+    "AI/ML": "RAG Agent LLM Transformer 微调 LoRA Prompt Embedding 向量数据库 机器学习 深度学习 NLP CV",
+    "数据处理": "Spark Hadoop Flink Kafka ETL 数据仓库 OLAP 数据湖 Pandas NumPy 数据清洗 可视化",
+    "安全": "认证 授权 OAuth JWT SQL注入 XSS CSRF 加密 HTTPS 零信任 防火墙 渗透 权限 RBAC",
 }
 
 # 关键词辅助（embedding兜底，高置信度关键词覆盖embedding结果）
 TOPIC_KEYWORDS = {
-    "Prompt Engineering": {
+    "编程语言": {
         "keywords": [
-            "提示词",
-            "prompt",
-            "思维链",
-            "cot",
-            "few-shot",
-            "zero-shot",
-            "结构化输出",
-            "指令设计",
-            "角色设定",
-            "负向提示",
-            "分步指令",
-            "提示",
-            "prompt engineering",
+            "python", "java", "go", "golang", "rust", "c++", "cpp", "c#", "csharp",
+            "typescript", "javascript", "js", "kotlin", "swift", "scala",
+            "异步", "asyncio", "多线程", "并发", "内存管理", "泛型", "装饰器", "协程",
+            "JVM", "spring", "springboot", "django", "flask", "fastapi",
+            "面向对象", "函数式", "闭包", "迭代器", "生成器",
         ],
-        "high_confidence": ["提示词", "prompt engineering", "提示"],
+        "high_confidence": ["python", "java", "golang", "typescript", "rust"],
     },
-    "RAG": {
+    "数据库": {
         "keywords": [
-            "rag",
-            "检索增强",
-            "chunk",
-            "分块",
-            "向量检索",
-            "向量数据库",
-            "rerank",
-            "重排序",
-            "bm25",
-            "混合检索",
-            "知识图谱",
-            "graph rag",
-            "graphrag",
-            "cr ag",
-            "self-rag",
-            "检索质量",
-            "文档更新",
-            "多模态",
-            "召回",
-            "query改写",
-            "query理解",
-            "缓存机制",
-            "metadata",
-            "长文档",
-            "智能客服",
+            "mysql", "redis", "postgresql", "mongodb", "elasticsearch", "oracle",
+            "sql", "索引", "事务", "分库分表", "nosql", "缓存", "查询优化",
+            "acid", "慢查询", "锁", "死锁", "主从", "读写分离", "分片",
+            "连接池", "orm", "数据迁移", "备份",
         ],
-        "high_confidence": ["rag", "检索增强", "知识图谱", "graph rag"],
+        "high_confidence": ["mysql", "redis", "索引", "事务", "sql"],
     },
-    "Agent": {
+    "系统设计": {
         "keywords": [
-            "agent",
-            "智能体",
-            "react",
-            "multi-agent",
-            "多智能体",
-            "function calling",
-            "tool use",
-            "memory",
-            "记忆",
-            "planning",
-            "langgraph",
-            "autogen",
-            "crewai",
-            "mcp",
-            "agentic",
+            "架构", "分布式", "微服务", "消息队列", "设计模式", "高并发", "高可用",
+            "cap", "负载均衡", "领域驱动", "ddd", "restful", "graphql",
+            "rpc", "api", "网关", "服务发现", "配置中心", "限流", "降级", "熔断",
+            "幂等", "最终一致性", "事件驱动", "cqrs", "saga",
         ],
-        "high_confidence": ["agent", "智能体", "multi-agent"],
-    },
-    "大模型": {
-        "keywords": [
-            "transformer",
-            "attention",
-            "注意力",
-            "llm",
-            "大模型",
-            "大语言模型",
-            "微调",
-            "sft",
-            "lora",
-            "量化",
-            "gptq",
-            "gguf",
-            "推理加速",
-            "kv cache",
-            "moe",
-            "幻觉",
-            "temperature",
-            "预训练",
-        ],
-        "high_confidence": ["llm", "大模型", "大语言模型", "transformer"],
+        "high_confidence": ["微服务", "分布式", "高并发", "消息队列"],
     },
     "工程化": {
         "keywords": [
-            "fastapi",
-            "docker",
-            "部署",
-            "sse",
-            "流式输出",
-            "websocket",
-            "负载均衡",
-            "ci/cd",
-            "限流",
-            "提示注入",
-            "容器编排",
-            "gpu",
+            "docker", "k8s", "kubernetes", "部署", "deploy", "ci/cd",
+            "限流", "监控", "日志", "测试", "容器编排", "自动化", "安全配置", "可观测",
+            "nginx", "jenkins", "git", "devops", "灰度", "回滚",
+            "单元测试", "集成测试", "性能测试", "压测", "链路追踪",
         ],
-        "high_confidence": ["docker", "部署", "fastapi"],
+        "high_confidence": ["docker", "k8s", "ci/cd", "devops"],
     },
-    "Python": {
-        "keywords": ["python", "asyncio", "异步", "pydantic", "装饰器", "生成器"],
-        "high_confidence": ["python"],
+    "前端": {
+        "keywords": [
+            "react", "vue", "angular", "css", "html", "webpack", "vite",
+            "跨域", "响应式", "seo", "ssr", "小程序", "组件化",
+            "dom", "浏览器", "http", "ajax", "axios", "路由", "状态管理",
+            "redux", "pinia", "vuex", "nextjs", "nuxt",
+        ],
+        "high_confidence": ["react", "vue", "angular", "前端", "css"],
+    },
+    "AI/ML": {
+        "keywords": [
+            "rag", "agent", "llm", "大模型", "transformer", "微调", "fine-tuning",
+            "lora", "prompt", "embedding", "向量数据库", "机器学习", "深度学习",
+            "nlp", "cv", "ner", "分类", "回归", "聚类", "神经网络",
+            "langchain", "langgraph", "autogen", "crewai", "function calling",
+            "幻觉", "预训练", "sft", "rlhf", "dpo", "mcp",
+        ],
+        "high_confidence": ["rag", "agent", "llm", "大模型", "transformer"],
+    },
+    "数据处理": {
+        "keywords": [
+            "spark", "hadoop", "flink", "kafka", "etl", "数据仓库",
+            "olap", "数据湖", "pipeline", "airflow",
+            "pandas", "numpy", "数据清洗", "数据分析", "可视化",
+        ],
+        "high_confidence": ["spark", "flink", "etl", "数据仓库"],
+    },
+    "安全": {
+        "keywords": [
+            "认证", "授权", "oauth", "jwt", "sql注入", "xss", "csrf",
+            "加密", "https", "零信任", "防火墙",
+            "渗透", "漏洞", "安全审计", "权限", "rbac",
+        ],
+        "high_confidence": ["sql注入", "xss", "oauth", "加密"],
     },
 }
 
@@ -238,14 +191,12 @@ def classify_topic(question: str) -> Optional[str]:
 def _domain_filter_sql(topic: Optional[str]) -> Tuple[str, list]:
     """生成按话题域过滤的SQL条件"""
     if topic:
-        # 标准化topic映射到数据库里的category
+        # 标准化新topic → 数据库category映射
         topic_to_category = {
-            "RAG": "RAG",
-            "Agent": "Agent",
-            "大模型": "大模型",
+            "编程语言": "Python",      # DB中仅Python归属编程语言类
             "工程化": "工程化",
-            "Python": "Python",
-            "Prompt Engineering": "大模型",  # prompt题归在大模型类
+            # AI/ML 覆盖多个旧类别(RAG/Agent/大模型)，不限制单类，搜全部
+            # 数据库/系统设计/前端/数据处理/安全——DB暂无对应数据，搜全部
         }
         category = topic_to_category.get(topic)
         if category:
@@ -255,7 +206,7 @@ def _domain_filter_sql(topic: Optional[str]) -> Tuple[str, list]:
 
 def _load_qa_in_domain(topic: Optional[str]) -> List[Dict]:
     """加载指定域的所有问答对"""
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             filter_sql, params = _domain_filter_sql(topic)
@@ -273,7 +224,7 @@ def _load_qa_in_domain(topic: Optional[str]) -> List[Dict]:
 
 def domain_fulltext_search(query: str, topic: Optional[str], limit: int = 5) -> List[Dict]:
     """域内全文检索"""
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             filter_sql, params = _domain_filter_sql(topic)
@@ -301,7 +252,7 @@ def domain_fulltext_search(query: str, topic: Optional[str], limit: int = 5) -> 
     if not keywords:
         return []
 
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             # 精确匹配回退：在所有关键词中找到匹配最多的那条题
@@ -385,7 +336,7 @@ def domain_semantic_search(query: str, topic: Optional[str], limit: int = 5, thr
 
 def domain_exact_match(query: str, topic: Optional[str]) -> Optional[Dict]:
     """域内精确匹配"""
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             if topic:
@@ -428,7 +379,7 @@ def get_related_questions(
     question: str, topic: Optional[str], current_id: Optional[int] = None, limit: int = 3
 ) -> List[Dict]:
     """推荐同域内相关问题（排除当前匹配的题）"""
-    conn = pymysql.connect(**DB_CONFIG)
+    conn = get_conn()
     try:
         with conn.cursor() as cur:
             filter_sql, params = _domain_filter_sql(topic)
@@ -496,7 +447,10 @@ def ask_deepseek(question: str) -> str:
     api_url = (get_setting("ai_base_url") or "https://api.deepseek.com") + "/chat/completions"
     model = get_setting("ai_model") or "deepseek-chat"
 
-    prompt = f"""你是一个AI应用开发专家。用户问了一个技术问题，请用简短（50-100字）、准确的方式回答。
+    t0 = time.time()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API 兜底回答... (model={model}, question=\"{question[:60]}...\")")
+
+    prompt = f"""你是一个技术专家。用户问了一个技术问题，请用简短（50-100字）、准确的方式回答。
 
 用户问题：{question}
 
@@ -519,6 +473,9 @@ def ask_deepseek(question: str) -> str:
     )
     resp = urllib.request.urlopen(req, timeout=15)
     data = json.loads(resp.read().decode())
+    elapsed = time.time() - t0
+    result_len = len(data["choices"][0]["message"]["content"])
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AI API 兜底回答完成 (耗时: {elapsed*1000:.0f}ms, 输出长度: {result_len}字)")
     return data["choices"][0]["message"]["content"]
 
 
@@ -548,16 +505,21 @@ def fast_answer(question: str) -> Dict[str, Any]:
     L4: DeepSeek兜底
     """
     start = time.time()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 快速问答开始... (question=\"{question[:60]}...\")")
 
     # L0: 缓存
     cached = query_cache.get(question)
     if cached:
         elapsed = time.time() - start
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ 缓存命中 (耗时: {elapsed*1000:.0f}ms, layer=0)")
         resp = {**cached, "layer": 0, "elapsed_ms": round(elapsed * 1000)}
         return resp
 
     # L0.5: 话题分类
+    t_topic = time.time()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在进行话题分类...")
     topic = classify_topic(question)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 话题分类完成 (耗时: {(time.time()-t_topic)*1000:.0f}ms, topic={topic})")
 
     # L1: 域内精确匹配 + LIKE
     result = domain_exact_match(question, topic)
@@ -578,7 +540,10 @@ def fast_answer(question: str) -> Dict[str, Any]:
         return resp
 
     # L2: 域内语义检索（主方案，embedding匹配）
+    t_sem = time.time()
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在进行域内语义检索... (threshold={SEMANTIC_MATCH_THRESHOLD})")
     sem = domain_semantic_search(question, topic, threshold=SEMANTIC_MATCH_THRESHOLD)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 语义检索完成 (耗时: {(time.time()-t_sem)*1000:.0f}ms, 匹配数={len(sem)})")
     if sem:
         best = sem[0]
         elapsed = time.time() - start

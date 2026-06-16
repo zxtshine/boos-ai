@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>面试问答Agent - AI应用开发面试陪练</title>
+<title>面试问答Agent - 智能面试陪练</title>
 <style>
   :root {
     --bg: #0f172a;
@@ -57,11 +57,14 @@
   .question-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
   .question-meta { display: flex; gap: 8px; align-items: center; }
   .tag { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-  .tag-rag { background: #1e3a5f; color: #60a5fa; }
-  .tag-agent { background: #3b0764; color: #c084fc; }
-  .tag-llm { background: #422006; color: #fbbf24; }
-  .tag-engineering { background: #14532d; color: #4ade80; }
-  .tag-python { background: #1e3a5f; color: #93c5fd; }
+  .tag-lang { background: #1e3a5f; color: #93c5fd; }
+  .tag-db { background: #14532d; color: #4ade80; }
+  .tag-sys { background: #3b0764; color: #c084fc; }
+  .tag-eng { background: #1e3a5f; color: #60a5fa; }
+  .tag-fe { background: #422006; color: #fbbf24; }
+  .tag-ai { background: #450a0a; color: #f87171; }
+  .tag-data { background: #052e16; color: #4ade80; }
+  .tag-sec { background: #450a0a; color: #f87171; }
   .tag-easy { background: #052e16; color: #4ade80; }
   .tag-medium { background: #422006; color: #fbbf24; }
   .tag-hard { background: #450a0a; color: #f87171; }
@@ -100,11 +103,31 @@
   .history-item .q { color: var(--text); }
   .history-item .s { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
 
-  /* Loading */
-  .loading { display: none; text-align: center; padding: 40px; }
-  .loading .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
+  /* Loading & Progress Bar */
+  .loading { display: none; text-align: center; padding: 40px 20px; }
+  .loading .spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .loading p { color: var(--text-muted); font-size: 14px; }
+  .progress-wrap { width: 100%; max-width: 400px; margin: 16px auto 0; }
+  .progress-bar-bg { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), #60a5fa); border-radius: 3px; transition: width 0.6s ease; }
+  .progress-steps { display: flex; justify-content: space-between; margin-top: 10px; }
+  .progress-step { font-size: 11px; color: var(--border); transition: color 0.3s; text-align: center; flex: 1; }
+  .progress-step.active { color: var(--accent); font-weight: 500; }
+  .progress-step.done { color: var(--green); }
+
+  /* Chat UI */
+  .chat-container { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-height: 300px; max-height: 55vh; overflow-y: auto; margin-bottom: 12px; display: flex; flex-direction: column; gap: 12px; }
+  .chat-bubble { max-width: 85%; padding: 12px 16px; border-radius: 12px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+  .chat-bubble.interviewer { align-self: flex-start; background: #0f172a; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+  .chat-bubble.user { align-self: flex-end; background: #1e3a5f; border: 1px solid #2563eb; border-bottom-right-radius: 4px; }
+  .chat-bubble .sender { font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .chat-bubble.user .sender { color: #60a5fa; }
+  .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .chat-input-row textarea { flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 14px; line-height: 1.6; resize: none; outline: none; font-family: inherit; min-height: 44px; }
+  .chat-input-row textarea:focus { border-color: var(--accent); }
+  .chat-input-row textarea::placeholder { color: #64748b; }
+  .chat-system-msg { text-align: center; font-size: 12px; color: var(--text-muted); padding: 8px; }
 
   /* Nav tabs */
   .nav-tabs { display: flex; gap: 4px; margin-bottom: 20px; background: var(--card); border-radius: 8px; padding: 4px; }
@@ -149,9 +172,9 @@
   <!-- ===== Tab: 学习模式 ===== -->
   <div id="tab-learn">
     <div class="card">
-      <div class="card-title">📖 问一个问题（RAG / Agent / 大模型 / 工程化）</div>
+      <div class="card-title">📖 问一个技术问题</div>
       <div class="setup-section">
-        <input type="text" id="learn-input" placeholder="例如：什么是RAG？Agent的ReAct模式怎么工作？" value="">
+        <input type="text" id="learn-input" placeholder="例如：什么是分布式事务？React和Vue的区别？" value="">
         <button class="btn btn-primary" onclick="learnAsk()">提问</button>
       </div>
     </div>
@@ -180,20 +203,25 @@
     <div id="learn-loading" class="loading">
       <div class="spinner"></div>
       <p id="learn-loading-text">正在搜索答案...</p>
+      <div class="progress-wrap">
+        <div class="progress-bar-bg">
+          <div id="learn-progress-fill" class="progress-bar-fill" style="width:0%"></div>
+        </div>
+      </div>
     </div>
 
     <!-- 快捷入口 -->
     <div class="card" style="margin-top:16px;">
       <div class="card-title">💡 试试这些问题</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;">
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是RAG？')">什么是RAG？</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是Agent？')">什么是Agent？</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是LoRA？')">什么是LoRA？</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是Transformer？')">什么是Transformer？</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是向量数据库？')">什么是向量数据库？</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('RAG的chunk策略有哪些？')">RAG的chunk策略</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('ReAct模式怎么工作？')">ReAct模式</button>
-        <button class="btn btn-secondary btn-sm" onclick="quickAsk('Multi-Agent有哪些模式？')">Multi-Agent模式</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是分布式事务？')">分布式事务</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是RESTful API？')">RESTful API</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是微服务架构？')">微服务架构</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是数据库索引？')">数据库索引</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('React和Vue有什么区别？')">React vs Vue</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('Docker和K8s的关系？')">Docker & K8s</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('什么是RAG？')">什么是RAG</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickAsk('Python装饰器怎么用？')">Python装饰器</button>
       </div>
     </div>
   </div>
@@ -205,55 +233,34 @@
     <div id="setup-section" class="card">
       <div class="card-title">🎯 选择面试方向</div>
       <div class="setup-section">
-        <input type="text" id="job-focus" placeholder="例如：RAG方向AI应用开发、Agent开发、大模型微调..." value="">
+        <input type="text" id="job-focus" placeholder="例如：后端开发、前端开发、数据分析、算法工程师..." value="">
         <button class="btn btn-primary" onclick="startInterview()">开始面试</button>
       </div>
       <div id="job-context" class="job-context"></div>
     </div>
 
-    <!-- Interview Panel -->
-    <div id="interview-panel" class="interview-panel">
-      <!-- Question -->
-      <div class="card">
-        <div class="question-header">
-          <div class="question-meta">
-            <span id="q-number" style="font-size:13px;color:var(--text-muted)">第 1 题</span>
-            <span id="q-category" class="tag tag-llm">RAG</span>
-            <span id="q-difficulty" class="tag tag-medium">medium</span>
-          </div>
-          <button class="btn btn-secondary btn-sm" onclick="nextQuestion()">下一题 →</button>
-        </div>
-        <div id="q-skills" class="skills-row"></div>
-        <div id="q-text" class="question-text">加载中...</div>
-        <div id="q-tips" class="tips-box"></div>
-
-        <!-- Answer -->
-        <div class="answer-area">
-          <textarea id="user-answer" placeholder="输入你的回答..."></textarea>
-          <div class="answer-actions">
-            <button class="btn btn-primary" onclick="submitAnswer()">📝 提交批改</button>
-          </div>
-        </div>
+    <!-- Chat Area -->
+    <div id="interview-chat" style="display:none;">
+      <div class="chat-container" id="chat-messages"></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="输入你的回答... (Enter 发送, Shift+Enter 换行)" rows="2" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage();}"></textarea>
+        <button class="btn btn-primary" id="chat-send-btn" onclick="sendMessage()">发送</button>
       </div>
-
-      <!-- Grade Panel -->
-      <div id="grade-panel" class="grade-panel card">
-        <div class="card-title">📋 批改结果</div>
-        <div id="grade-scores" class="grade-scores"></div>
-        <div id="grade-feedback" class="feedback-text"></div>
-        <div id="grade-followup" class="follow-up"></div>
-      </div>
-
-      <!-- End session -->
-      <div style="text-align:center;margin-top:16px;">
-        <button class="btn btn-danger" onclick="endInterview()">结束面试</button>
+      <div style="text-align:center;margin-top:12px;">
+        <button class="btn btn-danger btn-sm" onclick="endInterview()">结束面试</button>
       </div>
     </div>
 
     <!-- Loading -->
     <div id="loading" class="loading">
       <div class="spinner"></div>
-      <p>正在生成面试题...</p>
+      <p id="loading-text">正在准备...</p>
+      <div class="progress-wrap">
+        <div class="progress-bar-bg">
+          <div id="progress-fill" class="progress-bar-fill" style="width:0%"></div>
+        </div>
+        <div id="progress-steps" class="progress-steps"></div>
+      </div>
     </div>
 
   </div>
@@ -265,14 +272,29 @@
       <p>还没有面试记录<br>开始一次模拟面试后，这里会显示你的表现分析</p>
     </div>
     <div id="review-content" style="display:none;">
-      <div id="review-summary" class="review-summary"></div>
-      <div id="review-text" class="card">
-        <div class="card-title">📝 面试总结</div>
-        <div id="review-body" class="review-text"></div>
+      <!-- 总览统计 -->
+      <div class="card">
+        <div class="card-title">📈 面试总览</div>
+        <div id="review-summary" class="review-summary"></div>
       </div>
+
+      <!-- 类别雷达 + 下次权重 -->
+      <div class="card">
+        <div class="card-title">🎯 各类别表现 & 下次出题权重</div>
+        <div id="category-breakdown" style="display:flex;flex-direction:column;gap:10px;"></div>
+      </div>
+
+      <!-- 薄弱题目列表 -->
       <div id="weak-areas" class="card">
-        <div class="card-title">⚠️ 需要加强的方向</div>
+        <div class="card-title">⚠️ 得分最低的题目</div>
         <div id="weak-list"></div>
+      </div>
+
+      <!-- 历史会话列表 -->
+      <div class="card">
+        <div class="card-title">📋 历史面试记录</div>
+        <div id="sessions-list"></div>
+        <div id="session-detail" style="display:none;margin-top:16px;padding-top:16px;border-top:1px solid var(--border);"></div>
       </div>
     </div>
   </div>
@@ -281,9 +303,96 @@
 
 <script>
 let sessionId = null;
-let currentQuestion = null;
-let currentReferenceAnswer = "";
-let isGrading = false;
+
+// ===== Progress Bar 管理器 =====
+class ProgressBar {
+  constructor(fillId, textId, stepsId) {
+    this.fillEl = document.getElementById(fillId);
+    this.textEl = document.getElementById(textId);
+    this.stepsEl = document.getElementById(stepsId);
+    this._timer = null;
+    this._pct = 0;
+    this._target = 0;
+    this._stages = [];
+  }
+
+  start(stages) {
+    this._stages = stages;
+    this._pct = 0;
+    this._target = 0;
+    this.fillEl.style.width = '0%';
+    this.textEl.textContent = stages[0] || '正在准备...';
+    if (this.stepsEl) {
+      this.stepsEl.innerHTML = stages.map((s, i) =>
+        `<span class="progress-step${i === 0 ? ' active' : ''}">${s}</span>`
+      ).join('');
+    }
+    this._advance();
+  }
+
+  _advance() {
+    if (this._timer) clearTimeout(this._timer);
+    this._timer = setTimeout(() => {
+      if (this._pct < this._target) {
+        this._pct += 1;
+        this.fillEl.style.width = this._pct + '%';
+        // 更新阶段文字
+        const stageIdx = Math.min(
+          Math.floor(this._pct / (100 / this._stages.length)),
+          this._stages.length - 1
+        );
+        this.textEl.textContent = this._stages[stageIdx] + '...';
+        if (this.stepsEl) {
+          const steps = this.stepsEl.children;
+          for (let i = 0; i < steps.length; i++) {
+            steps[i].className = 'progress-step' +
+              (i < stageIdx ? ' done' : i === stageIdx ? ' active' : '');
+          }
+        }
+        this._advance();
+      }
+    }, 50);
+  }
+
+  setTarget(pct, stageIdx) {
+    this._target = Math.min(pct, 95); // 最多到95%，留给完成时跳到100%
+    if (stageIdx !== undefined && this._stages[stageIdx]) {
+      // 不强制立即更新文字，让 _advance 自然过渡
+    }
+    if (this._pct < this._target) this._advance();
+  }
+
+  finish(msg) {
+    if (this._timer) clearTimeout(this._timer);
+    this._pct = 100;
+    this._target = 100;
+    this.fillEl.style.width = '100%';
+    this.textEl.textContent = msg || '完成!';
+    if (this.stepsEl) {
+      const steps = this.stepsEl.children;
+      for (let i = 0; i < steps.length; i++) {
+        steps[i].className = 'progress-step done';
+      }
+    }
+  }
+
+  fail(msg) {
+    if (this._timer) clearTimeout(this._timer);
+    this.fillEl.style.width = '100%';
+    this.fillEl.style.background = 'var(--red)';
+    this.textEl.textContent = msg || '出错了';
+  }
+
+  destroy() {
+    if (this._timer) clearTimeout(this._timer);
+    this.fillEl.style.background = '';
+    this.fillEl.style.width = '0%';
+    if (this.stepsEl) this.stepsEl.innerHTML = '';
+  }
+}
+
+const interviewProgress = new ProgressBar('progress-fill', 'loading-text', 'progress-steps');
+const learnProgress = new ProgressBar('learn-progress-fill', 'learn-loading-text', null);
 
 // Tab switching
 function switchTab(tab) {
@@ -298,20 +407,17 @@ function switchTab(tab) {
 }
 
 // === 学习模式 ===
-let learnTimer = null;
 
 async function learnAsk() {
   const q = document.getElementById('learn-input').value.trim();
   if (!q) { alert('请输入问题'); return; }
 
   document.getElementById('learn-loading').style.display = 'block';
-  document.getElementById('learn-loading-text').textContent = '正在搜索答案...';
   document.getElementById('learn-result').style.display = 'none';
-
-  // 如果超过3秒显示提示
-  learnTimer = setTimeout(() => {
-    document.getElementById('learn-loading-text').textContent = '😅 稍微等一下，正在调DeepSeek...';
-  }, 2000);
+  learnProgress.start(['检索中', '分析中', '生成回答']);
+  // 模拟阶段推进
+  setTimeout(() => learnProgress.setTarget(30, 0), 200);
+  setTimeout(() => learnProgress.setTarget(60, 1), 600);
 
   try {
     const resp = await fetch('/api/learn/ask', {
@@ -321,9 +427,11 @@ async function learnAsk() {
     });
     const data = await resp.json();
 
-    clearTimeout(learnTimer);
-    document.getElementById('learn-loading').style.display = 'none';
-    document.getElementById('learn-result').style.display = 'block';
+    learnProgress.finish('✅ 完成');
+    setTimeout(() => {
+      document.getElementById('learn-loading').style.display = 'none';
+      learnProgress.destroy();
+    }, 400);
 
     document.getElementById('learn-q').textContent = data.question;
     document.getElementById('learn-a').textContent = data.answer;
@@ -375,8 +483,11 @@ async function learnAsk() {
       document.getElementById('learn-followup').style.display = 'none';
     }
   } catch (e) {
-    clearTimeout(learnTimer);
-    document.getElementById('learn-loading').style.display = 'none';
+    learnProgress.fail('❌ 请求失败');
+    setTimeout(() => {
+      document.getElementById('learn-loading').style.display = 'none';
+      learnProgress.destroy();
+    }, 800);
     document.getElementById('learn-result').style.display = 'block';
     document.getElementById('learn-q').textContent = q;
     document.getElementById('learn-a').textContent = '❌ 请求失败: ' + e.message;
@@ -407,14 +518,44 @@ function initDefault() {
 }
 initDefault();
 
-// Start interview
+// ===== Chat helpers =====
+function addChatBubble(role, sender, content) {
+  const chat = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'chat-bubble ' + role;
+  div.innerHTML = '<div class="sender">' + esc(sender) + '</div><div>' + esc(content) + '</div>';
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function addChatSystemMsg(msg) {
+  const chat = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'chat-system-msg';
+  div.textContent = msg;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ===== Interview Chat =====
+let _chatSending = false;
+
 async function startInterview() {
   const focus = document.getElementById('job-focus').value.trim();
   document.getElementById('loading').style.display = 'block';
   document.getElementById('setup-section').style.display = 'none';
-  document.getElementById('interview-panel').style.display = 'none';
-  document.getElementById('grade-panel').style.display = 'none';
-  isGrading = false;
+  document.getElementById('interview-chat').style.display = 'none';
+
+  interviewProgress.start(['加载简历', '匹配岗位', '检索知识库', 'AI生成面试题']);
+  setTimeout(() => interviewProgress.setTarget(15, 0), 300);
+  setTimeout(() => interviewProgress.setTarget(35, 1), 800);
+  setTimeout(() => interviewProgress.setTarget(60, 2), 1500);
+  setTimeout(() => interviewProgress.setTarget(85, 3), 2500);
 
   try {
     const resp = await fetch('/api/interview/start', {
@@ -431,154 +572,82 @@ async function startInterview() {
       ctx.style.display = 'block';
     }
 
-    renderQuestion(data.question);
-    document.getElementById('interview-panel').style.display = 'block';
-    document.getElementById('loading').style.display = 'none';
+    interviewProgress.finish('✅ 面试已就绪');
+    setTimeout(() => {
+      document.getElementById('loading').style.display = 'none';
+      interviewProgress.destroy();
+      // 显示聊天界面
+      document.getElementById('chat-messages').innerHTML = '';
+      document.getElementById('interview-chat').style.display = 'block';
+      addChatBubble('interviewer', '🤖 面试官', data.message);
+      document.getElementById('chat-input').focus();
+    }, 500);
   } catch (e) {
-    alert('启动面试失败: ' + e.message);
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('setup-section').style.display = 'block';
+    interviewProgress.fail('❌ 启动失败');
+    setTimeout(() => {
+      alert('启动面试失败: ' + e.message);
+      document.getElementById('loading').style.display = 'none';
+      interviewProgress.destroy();
+      document.getElementById('setup-section').style.display = 'block';
+    }, 600);
   }
 }
 
-// Render question
-function renderQuestion(q) {
-  currentQuestion = q;
-  currentReferenceAnswer = q.reference_answer || "";
-  document.getElementById('q-number').textContent = `第 ${q.question_number} 题`;
-  document.getElementById('q-text').textContent = q.question;
+async function sendMessage() {
+  if (!sessionId || _chatSending) return;
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
 
-  // Category tag
-  const catTag = document.getElementById('q-category');
-  catTag.textContent = q.category;
-  catTag.className = 'tag ' + getCategoryClass(q.category);
+  _chatSending = true;
+  input.disabled = true;
+  document.getElementById('chat-send-btn').disabled = true;
 
-  // Difficulty tag
-  const diffTag = document.getElementById('q-difficulty');
-  diffTag.textContent = q.difficulty === 'easy' ? '简单' : q.difficulty === 'hard' ? '困难' : '中等';
-  diffTag.className = 'tag tag-' + q.difficulty;
+  // 显示用户消息
+  addChatBubble('user', '👤 你', msg);
+  input.value = '';
+  input.style.height = 'auto';
 
-  // Skills
-  const skillsEl = document.getElementById('q-skills');
-  skillsEl.innerHTML = '';
-  if (q.skills && q.skills.length) {
-    q.skills.forEach(s => {
-      const pill = document.createElement('span');
-      pill.className = 'skill-pill';
-      pill.textContent = s;
-      skillsEl.appendChild(pill);
-    });
-  }
-
-  // Tips
-  const tipsEl = document.getElementById('q-tips');
-  if (q.tips && q.tips.length) {
-    tipsEl.innerHTML = '💡 ' + q.tips.join('<br>💡 ');
-    tipsEl.style.display = 'block';
-  } else {
-    tipsEl.style.display = 'none';
-  }
-
-  // Clear
-  document.getElementById('user-answer').value = '';
-  document.getElementById('grade-panel').style.display = 'none';
-  isGrading = false;
-}
-
-// Next question
-async function nextQuestion() {
-  if (!sessionId) return;
-  document.getElementById('grade-panel').style.display = 'none';
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('interview-panel').style.display = 'none';
+  // 加载状态
+  addChatSystemMsg('面试官正在输入...');
+  const loadingMsg = document.getElementById('chat-messages').lastElementChild;
 
   try {
-    const resp = await fetch('/api/interview/next', {
+    const resp = await fetch('/api/interview/chat', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: sessionId})
+      body: JSON.stringify({session_id: sessionId, message: msg})
     });
     const data = await resp.json();
-    renderQuestion(data.question);
-    document.getElementById('interview-panel').style.display = 'block';
-    document.getElementById('loading').style.display = 'none';
+    // 移除加载状态
+    if (loadingMsg && loadingMsg.className === 'chat-system-msg') loadingMsg.remove();
+
+    addChatBubble('interviewer', '🤖 面试官', data.reply);
+
+    if (data.want_to_end) {
+      addChatSystemMsg('面试官已结束本次面试');
+      document.getElementById('chat-input').style.display = 'none';
+      document.getElementById('chat-send-btn').style.display = 'none';
+    }
   } catch (e) {
-    alert('出题失败: ' + e.message);
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('interview-panel').style.display = 'block';
+    if (loadingMsg && loadingMsg.className === 'chat-system-msg') loadingMsg.remove();
+    addChatSystemMsg('❌ 发送失败: ' + e.message);
   }
+
+  _chatSending = false;
+  input.disabled = false;
+  document.getElementById('chat-send-btn').disabled = false;
+  input.focus();
 }
 
-// Submit answer
-async function submitAnswer() {
-  const answer = document.getElementById('user-answer').value.trim();
-  if (!answer) {
-    alert('请先输入你的回答');
-    return;
-  }
-  if (isGrading) return;
-  isGrading = true;
-
-  document.getElementById('loading').style.display = 'block';
-
-  try {
-    const resp = await fetch('/api/interview/answer', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        session_id: sessionId,
-        question: currentQuestion.question,
-        user_answer: answer,
-        reference_answer: currentReferenceAnswer
-      })
-    });
-    const data = await resp.json();
-    renderGrade(data.grade);
-    document.getElementById('loading').style.display = 'none';
-  } catch (e) {
-    alert('批改失败: ' + e.message);
-    document.getElementById('loading').style.display = 'none';
-    isGrading = false;
-  }
-}
-
-// Render grade
-function renderGrade(g) {
-  // Scores
-  const scoresEl = document.getElementById('grade-scores');
-  const scoreItems = [
-    {label: '总分', value: g.total_score, max: 10},
-    {label: '技术准确性', value: g.accuracy_score, max: 10},
-    {label: '完整性', value: g.completeness_score, max: 10},
-    {label: '实践经验', value: g.practice_score, max: 10},
-    {label: '表达清晰度', value: g.clarity_score, max: 10},
-  ];
-  scoresEl.innerHTML = scoreItems.map(s => {
-    const pct = (s.value / s.max * 100).toFixed(0);
-    const cls = pct >= 70 ? 'score-high' : pct >= 50 ? 'score-mid' : 'score-low';
-    return `<div class="score-card"><div class="value ${cls}">${s.value.toFixed(1)}</div><div class="label">${s.label}</div></div>`;
-  }).join('');
-
-  document.getElementById('grade-feedback').textContent = g.feedback || '';
-
-  const followupEl = document.getElementById('grade-followup');
-  if (g.follow_up && g.follow_up.length) {
-    followupEl.innerHTML = '<strong style="font-size:13px;color:var(--text-muted)">💡 面试官可能的追问：</strong><ul>' +
-      g.follow_up.map(f => `<li>${f}</li>`).join('') + '</ul>';
-  } else {
-    followupEl.innerHTML = '';
-  }
-
-  document.getElementById('grade-panel').style.display = 'block';
-  isGrading = false;
-}
-
-// End interview
 async function endInterview() {
   if (!sessionId) return;
   if (!confirm('确定结束本次面试？')) return;
 
-  document.getElementById('loading').style.display = 'block';
+  document.getElementById('chat-input').disabled = true;
+  document.getElementById('chat-send-btn').disabled = true;
+  addChatSystemMsg('正在生成面试总结...');
+  const loadingMsg = document.getElementById('chat-messages').lastElementChild;
 
   try {
     const resp = await fetch('/api/interview/end', {
@@ -589,75 +658,239 @@ async function endInterview() {
     const data = await resp.json();
     const s = data.summary;
 
-    alert(`🎯 面试结束！\n共 ${s.total_questions} 题 | 平均分 ${s.avg_score}\n\n建议回顾薄弱环节`);
+    if (loadingMsg && loadingMsg.className === 'chat-system-msg') loadingMsg.remove();
+
+    if (s.review) {
+      addChatBubble('interviewer', '📊 面试总结', s.review);
+    }
+    addChatSystemMsg('面试已结束');
+
+    // 小结弹窗
+    let summaryText = '面试已结束！';
+    if (s.total_questions) summaryText += `\n共 ${s.total_questions} 轮对话`;
+    if (s.avg_score) summaryText += ` | 平均分 ${s.avg_score}`;
+    if (s.review) summaryText += '\n\n详细总结已显示在上方';
+    alert('🎯 ' + summaryText);
 
     sessionId = null;
-    currentQuestion = null;
-    document.getElementById('interview-panel').style.display = 'none';
-    document.getElementById('grade-panel').style.display = 'none';
-    document.getElementById('setup-section').style.display = 'block';
-    document.getElementById('job-context').style.display = 'none';
-    document.getElementById('loading').style.display = 'none';
+    document.getElementById('chat-input').style.display = 'none';
+    document.getElementById('chat-send-btn').style.display = 'none';
 
     // 自动切到回顾页
-    switchTab('review');
-    loadReview();
+    setTimeout(() => { switchTab('review'); loadReview(); }, 1000);
   } catch (e) {
-    alert('结束面试失败: ' + e.message);
-    document.getElementById('loading').style.display = 'none';
+    if (loadingMsg && loadingMsg.className === 'chat-system-msg') loadingMsg.remove();
+    addChatSystemMsg('❌ 结束面试失败: ' + e.message);
+    document.getElementById('chat-input').disabled = false;
+    document.getElementById('chat-send-btn').disabled = false;
   }
 }
 
 // Load review
 async function loadReview() {
   try {
-    const resp = await fetch('/api/review/weak-areas?limit=5');
-    const data = await resp.json();
+    // 1. Load weak areas (lowest score questions)
+    const weakResp = await fetch('/api/review/weak-areas?limit=10');
+    const weakData = await weakResp.json();
 
-    if (data.weak_areas && data.weak_areas.length > 0) {
-      document.getElementById('review-empty').style.display = 'none';
-      document.getElementById('review-content').style.display = 'block';
+    // 2. Load all sessions
+    const sResp = await fetch('/api/review/sessions');
+    const sData = await sResp.json();
 
-      // Weak areas
-      const weakEl = document.getElementById('weak-list');
-      weakEl.innerHTML = data.weak_areas.map(w => {
-        const cls = w.score >= 7 ? 'score-high' : w.score >= 5 ? 'score-mid' : 'score-low';
-        return `<div class="history-item">
-          <div class="q">❓ ${w.question.substring(0, 80)}...</div>
-          <div class="s">得分: <span class="${cls}">${w.score}</span> | ${w.feedback ? w.feedback.substring(0, 100) + '...' : ''}</div>
-        </div>`;
-      }).join('');
-
-      // Sessions list
-      const sResp = await fetch('/api/review/sessions');
-      const sData = await sResp.json();
-      if (sData.sessions && sData.sessions.length > 0) {
-        // Load first session's summary
-        const detailResp = await fetch('/api/review/session/' + sData.sessions[0]);
-        const detail = await detailResp.json();
-        if (detail.total_questions > 0) {
-          document.getElementById('review-summary').innerHTML = `
-            <div class="review-stat"><div class="value">${detail.total_questions}</div><div class="label">答题数</div></div>
-            <div class="review-stat"><div class="value">${detail.avg_score}</div><div class="label">平均分</div></div>
-            <div class="review-stat"><div class="value">${detail.min_score}</div><div class="label">最低分</div></div>
-            <div class="review-stat"><div class="value">${detail.max_score}</div><div class="label">最高分</div></div>`;
-        }
+    if (!weakData.weak_areas || weakData.weak_areas.length === 0) {
+      // Check if there are any sessions at all
+      if (!sData.sessions || sData.sessions.length === 0) {
+        document.getElementById('review-empty').style.display = 'block';
+        document.getElementById('review-content').style.display = 'none';
+        return;
       }
     }
+
+    document.getElementById('review-empty').style.display = 'none';
+    document.getElementById('review-content').style.display = 'block';
+
+    // ── 总览统计 ──
+    let totalQuestions = 0, totalScore = 0, bestScore = 0, worstScore = 10;
+    const catScores = {}; // {category: [scores]}
+    if (weakData.weak_areas) {
+      weakData.weak_areas.forEach(w => {
+        totalQuestions++;
+        totalScore += w.score;
+        if (w.score > bestScore) bestScore = w.score;
+        if (w.score < worstScore) worstScore = w.score;
+        const cat = w.category || '未分类';
+        if (!catScores[cat]) catScores[cat] = [];
+        catScores[cat].push(w.score);
+      });
+    }
+    // Also check sessions for total count
+    if (sData.sessions && sData.sessions.length > 0) {
+      const detailResp = await fetch('/api/review/session/' + sData.sessions[0]);
+      const detail = await detailResp.json();
+      if (detail.total_questions > 0) {
+        totalQuestions = detail.total_questions;
+        totalScore = detail.avg_score * detail.total_questions;
+        bestScore = detail.max_score;
+        worstScore = detail.min_score;
+        document.getElementById('review-summary').innerHTML = `
+          <div class="review-stat"><div class="value">${detail.total_questions}</div><div class="label">总答题数</div></div>
+          <div class="review-stat"><div class="value score-${scoreClass(detail.avg_score)}">${detail.avg_score}</div><div class="label">平均分</div></div>
+          <div class="review-stat"><div class="value">${detail.min_score}</div><div class="label">最低分</div></div>
+          <div class="review-stat"><div class="value">${detail.max_score}</div><div class="label">最高分</div></div>
+          <div class="review-stat"><div class="value">${sData.sessions.length}</div><div class="label">面试次数</div></div>`;
+      } else {
+        document.getElementById('review-summary').innerHTML = `
+          <div class="review-stat"><div class="value">${totalQuestions}</div><div class="label">总答题数</div></div>
+          <div class="review-stat"><div class="value">${sData.sessions.length}</div><div class="label">面试次数</div></div>`;
+      }
+    }
+
+    // ── 类别表现 & 权重 ──
+    const catNames = ['编程语言', '数据库', '系统设计', '工程化', '前端', 'AI/ML', '数据处理', '安全'];
+    const defaultWeights = {'编程语言':0.17, '数据库':0.15, '系统设计':0.17, '工程化':0.14, '前端':0.11, 'AI/ML':0.10, '数据处理':0.08, '安全':0.08};
+    const breakdown = document.getElementById('category-breakdown');
+    breakdown.innerHTML = catNames.map(cat => {
+      const scores = catScores[cat] || [];
+      const avg = scores.length > 0 ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null;
+      const count = scores.length;
+      const dw = defaultWeights[cat];
+      // Simulate dynamic weight adjustment (same logic as engine.py)
+      let adjW = dw;
+      if (avg !== null) {
+        if (avg < 5) adjW = dw * 2.0;
+        else if (avg < 6) adjW = dw * 1.5;
+        else if (avg < 7) adjW = dw * 1.0;
+        else adjW = dw * 0.7;
+      }
+      const totalAdj = catNames.reduce((s, c) => {
+        const a = catScores[c] && catScores[c].length > 0 ?
+          (catScores[c].reduce((x,y)=>x+y,0)/catScores[c].length) : null;
+        let aw = defaultWeights[c];
+        if (a !== null) {
+          if (a < 5) aw = defaultWeights[c] * 2.0;
+          else if (a < 6) aw = defaultWeights[c] * 1.5;
+          else if (a < 7) aw = defaultWeights[c] * 1.0;
+          else aw = defaultWeights[c] * 0.7;
+        }
+        return s + aw;
+      }, 0);
+      const finalW = totalAdj > 0 ? (adjW / totalAdj * 100) : (dw * 100);
+      const barW = Math.max(5, finalW);
+      const barColor = finalW > 30 ? 'var(--red)' : finalW > 25 ? 'var(--orange)' : finalW > 15 ? 'var(--accent)' : 'var(--green)';
+
+      return `<div style="display:flex;align-items:center;gap:12px;">
+        <span style="width:70px;font-size:13px;font-weight:500;" class="tag ${getCategoryClass(cat)}">${cat}</span>
+        <span style="width:50px;font-size:13px;color:var(--text-muted);text-align:right;">${avg || '--'}分</span>
+        <span style="font-size:12px;color:var(--text-muted);width:40px;text-align:right;">${count}题</span>
+        <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;">
+          <div style="height:100%;width:${barW}%;background:${barColor};border-radius:4px;transition:width 0.5s;"></div>
+        </div>
+        <span style="width:55px;font-size:12px;color:var(--text-muted);text-align:right;">${finalW.toFixed(0)}%</span>
+      </div>`;
+    }).join('');
+
+    // ── 薄弱题目列表 ──
+    const weakEl = document.getElementById('weak-list');
+    if (weakData.weak_areas && weakData.weak_areas.length > 0) {
+      weakEl.innerHTML = weakData.weak_areas.slice(0, 5).map(w => {
+        const cls = w.score >= 7 ? 'score-high' : w.score >= 5 ? 'score-mid' : 'score-low';
+        const catTag = w.category ? `<span class="tag ${getCategoryClass(w.category)}">${w.category}</span>` : '';
+        return `<div class="history-item">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div class="q" style="flex:1;">❓ ${esc(w.question).substring(0, 100)}</div>
+            ${catTag}
+            <span class="${cls}" style="font-size:16px;font-weight:700;">${w.score}</span>
+          </div>
+          <div class="s">${w.feedback ? esc(w.feedback).substring(0, 150) : ''}</div>
+        </div>`;
+      }).join('');
+      document.getElementById('weak-areas').style.display = 'block';
+    } else {
+      document.getElementById('weak-areas').style.display = 'none';
+    }
+
+    // ── 历史会话列表 ──
+    const sessionsEl = document.getElementById('sessions-list');
+    if (sData.sessions && sData.sessions.length > 0) {
+      sessionsEl.innerHTML = '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">' +
+        sData.sessions.slice(0, 20).map((sid, i) =>
+          `<button class="btn btn-secondary btn-sm" onclick="loadSessionDetail('${sid}')" id="sess-btn-${sid}">
+            📋 ${sid.substring(0, 8)}...
+          </button>`
+        ).join('') + '</div>';
+    } else {
+      sessionsEl.innerHTML = '<p style="color:var(--text-muted);font-size:13px;">暂无历史会话</p>';
+    }
+
   } catch (e) {
     console.error('加载回顾失败:', e);
+    document.getElementById('review-empty').style.display = 'block';
+    document.getElementById('review-empty').innerHTML = '<div class="icon">⚠️</div><p>加载失败: ' + e.message + '</p>';
   }
+}
+
+async function loadSessionDetail(sessionId) {
+  // Highlight active button
+  document.querySelectorAll('#sessions-list button').forEach(b => b.classList.remove('btn-primary'));
+  const btn = document.getElementById('sess-btn-' + sessionId);
+  if (btn) btn.className = 'btn btn-primary btn-sm';
+
+  const detailEl = document.getElementById('session-detail');
+  try {
+    const resp = await fetch('/api/review/session/' + sessionId);
+    const detail = await resp.json();
+    if (detail.total_questions > 0) {
+      detailEl.style.display = 'block';
+      detailEl.innerHTML = `
+        <div class="card-title">📋 会话 ${sessionId.substring(0, 12)}... — ${detail.total_questions} 题，均分 ${detail.avg_score}</div>
+        <div class="review-summary" style="margin-bottom:12px;">
+          <div class="review-stat"><div class="value">${detail.total_questions}</div><div class="label">题目数</div></div>
+          <div class="review-stat"><div class="value score-${scoreClass(detail.avg_score)}">${detail.avg_score}</div><div class="label">平均分</div></div>
+          <div class="review-stat"><div class="value">${detail.min_score}</div><div class="label">最低</div></div>
+          <div class="review-stat"><div class="value">${detail.max_score}</div><div class="label">最高</div></div>
+        </div>
+        ${(detail.records || []).map(r => {
+          const cls = r.score >= 7 ? 'score-high' : r.score >= 5 ? 'score-mid' : 'score-low';
+          const catTag = r.category ? `<span class="tag ${getCategoryClass(r.category)}" style="font-size:11px;">${r.category}</span>` : '';
+          return `<div class="history-item">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px;">
+              <div style="flex:1;font-size:13px;">${esc(r.question || '').substring(0, 120)}</div>
+              ${catTag}
+              <span class="${cls}" style="font-weight:700;">${r.score}</span>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);">💬 ${esc(r.user_answer || '').substring(0, 100)}</div>
+            ${r.feedback ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">📝 ${esc(r.feedback).substring(0, 150)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      `;
+    } else {
+      detailEl.style.display = 'block';
+      detailEl.innerHTML = '<p style="color:var(--text-muted);">该会话暂无详细记录</p>';
+    }
+  } catch (e) {
+    detailEl.style.display = 'block';
+    detailEl.innerHTML = '<p style="color:var(--red);">加载失败: ' + e.message + '</p>';
+  }
+}
+
+function scoreClass(score) {
+  if (score >= 7) return 'high';
+  if (score >= 5) return 'mid';
+  return 'low';
 }
 
 function getCategoryClass(cat) {
   const map = {
-    'RAG': 'tag-rag',
-    'Agent': 'tag-agent',
-    '大模型': 'tag-llm',
-    '工程化': 'tag-engineering',
-    'Python': 'tag-python'
+    '编程语言': 'tag-lang',
+    '数据库': 'tag-db',
+    '系统设计': 'tag-sys',
+    '工程化': 'tag-eng',
+    '前端': 'tag-fe',
+    'AI/ML': 'tag-ai',
+    '数据处理': 'tag-data',
+    '安全': 'tag-sec'
   };
-  return map[cat] || 'tag-llm';
+  return map[cat] || 'tag-eng';
 }
 </script>
 </body>

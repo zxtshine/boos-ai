@@ -48,7 +48,8 @@ elapsed = time.time() - start
 print(f"3. embedding+检索全流程(100次): {elapsed:.3f}s = {elapsed / 100 * 1000:.1f}ms/次")
 
 # 4. MySQL查询速度
-conn = pymysql.connect(host="127.0.0.1", user="root", password="wu1364382646", database="ai_jobs_db")
+from mysql_config import get_conn
+conn = get_conn()
 cur = conn.cursor()
 start = time.time()
 for _ in range(100):

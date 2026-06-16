@@ -32,13 +32,7 @@ active_sessions: Dict[str, InterviewEngine] = {}
 
 class StartInterviewRequest(BaseModel):
     job_focus: str = ""
-
-
-class AnswerRequest(BaseModel):
-    session_id: str
-    question: str
-    user_answer: str
-    reference_answer: str = ""
+    use_local_model: bool = False
 
 
 class AddQARequest(BaseModel):
@@ -54,54 +48,46 @@ class AddQARequest(BaseModel):
 @app.post("/api/interview/start")
 def start_interview(req: StartInterviewRequest):
     """开始新的面试会话"""
-    engine = InterviewEngine(job_focus=req.job_focus)
+    engine = InterviewEngine(job_focus=req.job_focus, use_local_model=req.use_local_model)
     session_id = engine.session_id
     active_sessions[session_id] = engine
 
-    # 生成第一道题
-    question = engine.next_question()
+    result = engine.start()
 
     return {
         "session_id": session_id,
-        "question": question,
-        "job_focus": req.job_focus or "通用AI应用开发",
+        "message": result["message"],
+        "question_count": result["question_count"],
+        "job_focus": req.job_focus or "",
         "job_context": engine.job_context,
     }
 
 
-@app.post("/api/interview/next")
-def next_question(data: dict):
-    """下一题"""
+@app.post("/api/interview/chat")
+def interview_chat(data: dict):
+    """对话式面试：发送用户消息，获取面试官回复"""
     session_id = data.get("session_id", "")
     engine = active_sessions.get(session_id)
     if not engine:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
-    question = engine.next_question()
-    return {"question": question}
+    message = data.get("message", "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="消息不能为空")
 
-
-@app.post("/api/interview/answer")
-def submit_answer(req: AnswerRequest):
-    """提交回答并批改"""
-    engine = active_sessions.get(req.session_id)
-    if not engine:
-        raise HTTPException(status_code=404, detail="会话不存在或已过期")
-
-    grade = engine.grade(req.question, req.user_answer, req.reference_answer)
-    return {"grade": grade}
+    reply = engine.chat(message)
+    return reply
 
 
 @app.post("/api/interview/end")
 def end_interview(data: dict):
     """结束面试"""
     session_id = data.get("session_id", "")
-    engine = active_sessions.get(session_id)
+    engine = active_sessions.pop(session_id, None)
     if not engine:
         raise HTTPException(status_code=404, detail="会话不存在或已过期")
 
     summary = engine.end_session()
-    active_sessions.pop(session_id, None)
     return {"summary": summary}
 
 
@@ -182,7 +168,7 @@ def add_qa(req: AddQARequest):
 @app.get("/api/qa/categories")
 def list_categories():
     """获取所有分类"""
-    qa_categories = ["RAG", "Agent", "大模型", "工程化", "Python"]
+    qa_categories = ["编程语言", "数据库", "系统设计", "工程化", "前端", "AI/ML", "数据处理", "安全"]
     job_categories = get_all_job_categories()
     return {
         "qa_categories": qa_categories,

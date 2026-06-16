@@ -22,7 +22,7 @@ def version_cmd():
     output.emit(output.ok("version", data={"version": "0.1.0"}))
 
 
-# ── Schema：AI Agent 工具描述 ──
+# ── Schema：Agent 工具描述 ──
 @main.command("schema")
 def schema_cmd():
     path = __file__.replace("cli.py", "schema.json")

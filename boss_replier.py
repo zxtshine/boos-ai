@@ -14,6 +14,82 @@ sys.path.insert(0, str(Path(__file__).parent / "interview"))
 from llm_client import llm_chat_deepseek
 
 from boss_state import get_recent_messages, get_setting
+import httpx
+
+OLLAMA_BASE = "http://localhost:11434"
+
+
+def _needs_human_transfer(hr_message: str, conversation_id: int = 0) -> bool:
+    """用本地小模型判断 HR 是否要求转人工 / 跟真人沟通。
+
+    成功返回 True/False，Ollama 不可用时回退到关键词匹配。
+    """
+    CLASSIFY_PROMPT = (
+        '你是一个我的ai求职助手，我正在用ai和hr聊天。你现在需要判断招聘平台的HR发来的消息，'
+        '是否包含了「要求与真人/本人沟通」的意图。\n'
+        '这包括：要求转人工、想跟真人聊天、要求本人回复、不要AI回复、想和开发者聊天。\n'
+        '不包括：普通寒暄（你好/在吗）、询问岗位信息、安排面试、问技术问题。\n'
+        '只输出一个单词：yes 或 no，不要有多余的输出。'
+    )
+    # 第一层：明显关键词，秒判（不调模型）
+    obvious = [
+        "转人工", "转吧", "本人回复", "本人来", "真人回复", "真人来",
+        "找本人", "喊一下", "叫一下", "帮喊", "帮叫", "帮我喊", "帮我叫",
+        "通知本人", "叫你主人", "叫你老板", "让开发者", "让求职者",
+    ]
+    if any(kw in hr_message for kw in obvious):
+        return True
+
+    # 第二层：模糊表达，需要结合上下文（调模型）
+    ambiguous = [
+        "你是AI", "自动回复", "机器人", "不要AI", "不是本人",
+        "让本人", "本人呢", "真人在哪", "开发者呢", "求职者呢",
+        "真人吗", "AI吗", "自动吗", "机器人吗",
+    ]
+    if not any(kw in hr_message for kw in ambiguous):
+        return False
+    # 带上最近 3 条聊天记录作为上下文
+    user_content = hr_message
+    if conversation_id:
+        try:
+            history = get_recent_messages(conversation_id, 3)
+            if history:
+                lines = ["最近的对话记录（用于理解上下文）:"]
+                for m in reversed(history):
+                    sender = "HR" if m["sender"] == "hr" else "我"
+                    content = m["content"]
+                    # 己方消息太长会淹没 HR 信号，截短
+                    limit = 30 if sender == "我" else 80
+                    lines.append(f"  {sender}: {content[:limit]}")
+                lines.append(f"\nHR 最新消息: {hr_message}")
+                user_content = "\n".join(lines)
+        except Exception:
+            pass
+    print("LLM:", user_content)
+    try:
+        resp = httpx.post(
+            f"{OLLAMA_BASE}/api/chat",
+            json={
+                "model": "qwen2.5:1.5b",
+                "messages": [
+                    {"role": "system", "content": CLASSIFY_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                "temperature": 0.0,
+                "stream": False,
+                "options": {
+                    "num_predict": 3,  # 最多输出 3 个 token，阻止长篇推理
+                },
+            },
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        result = resp.json()["message"]["content"].strip().lower()
+        return result.startswith("yes")
+    except Exception:
+        # Ollama 不可用 → 回退关键词
+        keywords = ["转人工", "想跟真人", "要真人", "不要AI", "本人回复"]
+        return any(kw in hr_message for kw in keywords)
 
 SYSTEM_PROMPT = """你是一个求职者开发的AI助手，在BOSS直聘上帮他自动与招聘方沟通。
 
@@ -124,13 +200,13 @@ def generate_reply(
     style: str = "professional",
     resume_summary: str = "",
     wechat_id: str = "",
-) -> tuple:
+) -> dict:
     """
     根据 HR 消息生成 AI 回复和兴趣度评估。
-    返回 (reply_text, interest_level) 元组，失败时返回 ("", "").
+    返回 {"reply": str, "interest": str, "transfer": bool}，失败时返回 {"reply": "", "interest": "", "transfer": False}.
     """
     if not hr_message or len(hr_message.strip()) < 1:
-        return "", ""
+        return {"reply": "", "interest": "", "transfer": False}
 
     hr_lower = hr_message.strip().lower()
     if hr_lower in ("你好", "您好", "hi", "hello", "嗨", "在吗", "在吗？", "在不在", "在不在？"):
@@ -139,11 +215,17 @@ def generate_reply(
         desc_hint = ""
         if job_info.get("description"):
             desc_hint = f"，看了JD感觉挺对口的"
-        return (
-            f"您好！看到贵司在招{title}，挺感兴趣的{desc_hint}。PS：正在和你聊的这个AI是我自己开发的，算是我的技术名片～",
-            "low",
-        )
-
+        return {
+            "reply": f"您好！看到贵司在招{title}，挺感兴趣的{desc_hint}。PS：正在和你聊的这个AI是我自己开发的，正在不断优化当中。您可以和它聊聊看，如果您觉得它还有什么不好的地方，或者有什么事情想和我聊聊，可以对他说转人工，我就能收到提示啦~",
+            "interest": "low",
+            "transfer": False,
+        }
+    if _needs_human_transfer(hr_message, conversation_id):
+        return {
+            "reply": "好的，已经为您发送转人工提醒，但是在我看到消息并且回复您之前，请让它代替我陪您聊天~",
+            "interest": "low",
+            "transfer": True,
+        }
     try:
         context = build_reply_context(conversation_id, hr_message, job_info, resume_summary, wechat_id)
 
@@ -169,7 +251,6 @@ def generate_reply(
             interest = (parsed.get("interest") or parsed.get("level") or "").strip().lower()
         except json.JSONDecodeError:
             import re
-
             m = re.search(r'"reply"\s*:\s*"([^"]*)"', raw)
             if m:
                 reply = m.group(1).strip()
@@ -184,7 +265,7 @@ def generate_reply(
             if not reply:
                 reply = raw
             if len(reply) < 2:
-                return "", ""
+                return {"reply": "", "interest": "", "transfer": False}
 
         if len(reply) > 300:
             reply = reply[:300] + "..."
@@ -200,13 +281,13 @@ def generate_reply(
         ]
         for pattern in refusal_patterns:
             if pattern.lower() in reply.lower():
-                return "", ""
+                return {"reply": "", "interest": "", "transfer": False}
 
-        return reply, interest
+        return {"reply": reply, "interest": interest, "transfer": False}
 
     except Exception as e:
         print(f"  ⚠️ generate_reply error: {e}")
-        return "", ""
+        return {"reply": "", "interest": "", "transfer": False}
 
 
 def generate_greeting(
@@ -292,12 +373,16 @@ def generate_greeting_ai(
                 job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints
             )
             print(f"[greeting] → smart 模式 prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
+            print(f"[greeting] system_prompt: {system_prompt}")
+            print(f"[greeting] user_prompt: {user_prompt}")
         else:
             system_prompt = GREETING_SYSTEM_PROMPT
             user_prompt = _build_generic_prompt(
                 job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints
             )
             print(f"[greeting] → generic 模式 prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
+            print(f"[greeting] system_prompt: {system_prompt}")
+            print(f"[greeting] user_prompt: {user_prompt}")
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -306,10 +391,11 @@ def generate_greeting_ai(
 
         print(f"[greeting] → 调用 LLM ...")
         raw = llm_chat_deepseek(messages, temperature=0.8)
+        print(f"[greeting] LLM 返回长度={len(raw)},raw:{raw}")
         text = (raw or "").strip().strip('"').strip("'").strip()
         # 去掉模型可能多输出的前缀
         text = re.sub(r"^(招呼语|打招呼语|回复)[:：]\s*", "", text)
-        print(f"[greeting] LLM 返回长度={len(text)} 预览={text[:80]!r}")
+        print(f"[greeting] LLM 返回长度={len(text)} 预览={text!r}")
 
         # 质量校验：太短/太长/含联系方式 → 回退模板
         if not text or len(text) < 6:
@@ -333,16 +419,25 @@ def generate_greeting_ai(
         print(f"  ⚠️ generate_greeting_ai 回退模板: {e}")
         return generate_greeting(job_title, company, style=style, hr_name=hr_name)
 
-
 def _build_generic_prompt(
     job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints=""
 ):
-    parts = [
+    parts = []
+    if job_desc and len(job_desc.strip()) >= 20:
+        try:
+            from boss_rag import similar_jds, build_rag_context
+            similar = similar_jds(job_desc, limit=3)
+            rag = build_rag_context(similar, "greeting")
+            if rag:
+                parts.append(rag)
+        except Exception:
+            pass
+    parts.extend([
         f"招聘公司: {company or '未知'}",
         f"岗位名称: {job_title or '未知'}",
         f"招聘者称呼: {hr_name or '（未知，可不带称呼）'}",
         f"boss_hint: {'true' if is_boss else 'false'}",
-    ]
+    ])
     if job_desc:
         parts.append(f"岗位JD（节选）: {job_desc[:400]}")
     if resume_summary:
@@ -356,15 +451,24 @@ def _build_generic_prompt(
 
 def _build_smart_prompts(job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints=""):
     """smart 模式：消费用户在前端填的 smart_greeting_prompt（规则化）。"""
+    # RAG: 检索历史相似JD的招呼语经验
+    rag_context = ""
+    if job_desc and len(job_desc.strip()) >= 20:
+        try:
+            from boss_rag import similar_jds, build_rag_context
+            similar = similar_jds(job_desc, limit=3)
+            rag_context = build_rag_context(similar, "greeting")
+        except Exception:
+            pass
+
     user_rules = get_setting("smart_greeting_prompt", "")
     if not user_rules.strip():
         user_rules = (
             "规则：\n"
-            "1. 严格从下面的JD中找到3个核心能力要求（不是痛点，是JD里真正要求的能力）\n"
+            "1. 严格从下面的JD中找到3个核心能力要求，每个不超过10个字，尽量引用JD原词\n"
             "2. 方向必须从JD关键词中提取（如JD写项目管理→方向就是项目管理，JD写AI产品→方向就是AI产品）\n"
-            "3. 每个能力不超过10个字，尽量引用JD原词\n"
-            "4. 严格按以下格式，不要自己编方向，不要加解释：\n\n"
-            "老板，我的方向是【从JD提取的方向词】——【能力1】、【能力2】、【能力3】，按效果付费，做不到不拿底薪，聊聊？"
+            "3. 严格按以下格式，不要自己编方向，不要加解释：\n\n"
+            "您好，我的方向是【从JD提取的方向词】，擅长【能力1】、【能力2】、【能力3】，看到贵司的JD觉得很匹配，方便聊聊吗？"
         )
 
     system_prompt = (

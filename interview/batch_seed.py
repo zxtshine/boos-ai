@@ -6,6 +6,7 @@
 
 import json, os, re, sys, time
 import urllib.request
+from datetime import datetime
 
 # AI API（从SQLite设置读取）
 import sys, os
@@ -19,20 +20,7 @@ BASE_URL = get_setting("ai_base_url") or "https://api.deepseek.com"
 API_URL = f"{BASE_URL}/chat/completions"
 MODEL = get_setting("ai_model") or "deepseek-chat"
 
-import pymysql
-
-DB = {
-    "host": "127.0.0.1",
-    "port": 3306,
-    "user": "root",
-    "password": "wu1364382646",
-    "database": "ai_jobs_db",
-    "charset": "utf8mb4",
-}
-
-
-def get_conn():
-    return pymysql.connect(**DB)
+from mysql_config import get_conn
 
 
 def question_exists(question):
@@ -183,6 +171,9 @@ TOPICS = {
 
 def call_deepseek(messages, max_tokens=400, temperature=0.3):
     """调用DeepSeek API，带重试"""
+    t0 = time.time()
+    last_content = (messages[-1]["content"] if messages else "")[:80].replace("\n", " ")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API 批量生成... (model={MODEL}, context=\"{last_content}...\")")
     payload = json.dumps(
         {
             "model": MODEL,
@@ -196,12 +187,15 @@ def call_deepseek(messages, max_tokens=400, temperature=0.3):
     )
     resp = urllib.request.urlopen(req, timeout=60)
     data = json.loads(resp.read().decode())
+    elapsed = time.time() - t0
+    result_len = len(data["choices"][0]["message"]["content"])
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AI API 批量生成完成 (耗时: {elapsed*1000:.0f}ms, 输出长度: {result_len}字)")
     return data["choices"][0]["message"]["content"]
 
 
 def generate_answer(topic, question):
     """生成单个问题-答案对（重试1次）"""
-    prompt = f"""你是一个资深的AI应用开发面试专家。请为以下面试题提供高质量答案。
+    prompt = f"""你是一个资深的技术面试专家。请为以下面试题提供高质量答案。
 
 分类：{topic}
 面试题：{question}

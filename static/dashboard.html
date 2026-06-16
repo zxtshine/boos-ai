@@ -1462,6 +1462,47 @@ td a:hover{color:var(--accent)}
 .cs-follow-label{font-size:11px;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px;}
 .cs-tone{padding:10px 14px;background:var(--accent-soft);border:1px solid rgba(99,102,241,.15);border-radius:var(--radius);font-size:12px;line-height:1.5;color:var(--text-2);}.cs-boss-hint{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--accent-soft);border:1px solid rgba(99,102,241,.2);border-radius:var(--radius);font-size:11px;font-weight:600;color:var(--accent);margin-bottom:10px;}
 
+/* ══════ Interview Modal ══════ */
+.iv-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(8px);z-index:1001;display:flex;align-items:center;justify-content:center;animation:fadeIn .2s var(--ease-out);}
+.iv-modal{background:var(--bg-1);border:1px solid var(--border-2);border-radius:var(--radius-lg);width:min(700px,94vw);max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 80px -10px rgba(0,0,0,.7);overflow:hidden;animation:modalIn .3s var(--ease-out);}
+.iv-modal-head{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--border);background:var(--bg-2);flex-shrink:0;}
+.iv-modal-head h3{margin:0;font-size:14px;font-weight:600;color:var(--text);}
+.iv-modal-head .iv-meta{font-size:11px;color:var(--text-3);margin-top:2px;}
+.iv-close{background:none;border:none;color:var(--text-3);font-size:20px;cursor:pointer;padding:4px 8px;border-radius:var(--radius-sm);line-height:1;}
+.iv-close:hover{background:var(--bg-3);color:var(--text);}
+.iv-chat{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth;}
+.iv-chat::-webkit-scrollbar{width:5px;}
+.iv-chat::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:3px;}
+.iv-bubble{max-width:85%;padding:12px 16px;border-radius:var(--radius);font-size:13px;line-height:1.65;animation:modalIn .25s var(--ease-out);}
+.iv-bubble-q{align-self:flex-start;background:var(--bg-2);border:1px solid var(--border);color:var(--text);border-bottom-left-radius:4px;}
+.iv-bubble-a{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-bottom-right-radius:4px;}
+.iv-bubble-label{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px;opacity:.7;}
+.iv-grade-card{align-self:stretch;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;animation:modalIn .3s var(--ease-out);}
+.iv-grade-scores{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;}
+@media(max-width:520px){.iv-grade-scores{grid-template-columns:repeat(2,1fr);}}
+.iv-grade-item{text-align:center;padding:8px 4px;background:var(--bg-3);border-radius:var(--radius-sm);}
+.iv-grade-val{font-size:22px;font-weight:700;color:var(--accent);line-height:1;}
+.iv-grade-label{font-size:10px;color:var(--text-3);margin-top:2px;}
+.iv-grade-total{text-align:center;font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px;padding:6px;background:var(--bg-3);border-radius:var(--radius-sm);}
+.iv-grade-feedback{font-size:12.5px;line-height:1.6;color:var(--text);}
+.iv-grade-feedback strong{color:var(--accent);}
+.iv-follow-up{margin-top:8px;font-size:12px;color:var(--text-2);}
+.iv-follow-up li{margin-bottom:3px;}
+.iv-input-row{display:flex;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:var(--bg-2);flex-shrink:0;}
+.iv-input-row textarea{flex:1;min-height:42px;max-height:100px;resize:vertical;padding:10px 12px;background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;font-family:var(--mono);line-height:1.5;outline:none;}
+.iv-input-row textarea:focus{border-color:var(--accent);}
+.iv-input-row textarea::placeholder{color:var(--text-3);}
+.iv-actions{display:flex;gap:6px;padding:0 20px 14px;background:var(--bg-2);flex-shrink:0;}
+.iv-summary{padding:20px;}
+.iv-summary h4{font-size:15px;font-weight:600;color:var(--accent);margin:0 0 10px;}
+.iv-summary-stats{display:flex;gap:16px;margin-bottom:14px;flex-wrap:wrap;}
+.iv-summary-stat{text-align:center;min-width:60px;}
+.iv-summary-stat .val{font-size:24px;font-weight:700;color:var(--text);}
+.iv-summary-stat .lbl{font-size:10px;color:var(--text-3);margin-top:2px;text-transform:uppercase;letter-spacing:.05em;}
+.iv-summary-review{font-size:13px;line-height:1.7;color:var(--text);white-space:pre-wrap;}
+.iv-summary-low{margin-top:12px;padding:10px 14px;background:var(--red-soft);border:1px solid rgba(239,68,68,.15);border-radius:var(--radius);font-size:12px;color:var(--red);}
+.iv-loading{align-self:center;display:flex;align-items:center;gap:10px;padding:20px;color:var(--text-2);font-size:13px;}
+
 .hr-wechat-card{
   padding:16px 0;
   border-bottom:1px solid var(--border);
@@ -1510,6 +1551,82 @@ td a:hover{color:var(--accent)}
   flex-shrink:0;
   font-family:var(--mono);
 }
+
+.transfer-request-card{
+  padding:16px 0;
+  border-bottom:1px solid var(--border);
+  cursor:pointer;
+  transition:background .2s;
+}
+.transfer-request-card:hover{background:var(--bg-2);margin:0 -20px;padding-left:20px;padding-right:20px;}
+.transfer-request-card:last-child{border-bottom:none}
+.transfer-request-card .row{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+}
+.transfer-request-card .who{
+  font-weight:600;
+  font-size:13.5px;
+  color:var(--text);
+}
+.transfer-request-card .desc{
+  font-size:12px;
+  color:var(--text-2);
+  margin:8px 0;
+  line-height:1.5;
+  background:var(--bg-2);
+  padding:10px 12px;
+  border-radius:var(--radius-sm);
+  border-left:2px solid var(--warn);
+}
+.transfer-request-card .meta{
+  font-size:10.5px;
+  color:var(--text-3);
+  text-align:right;
+  flex-shrink:0;
+  font-family:var(--mono);
+}
+
+/* ============ Agent Panel ============ */
+.agent-shell{display:flex;flex-direction:column;gap:16px;}
+.agent-input-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;}
+.agent-input-row .grow{flex:1;min-width:260px;}
+.agent-input-row label{display:block;font-size:12px;color:var(--text-3);margin-bottom:5px;font-weight:500;}
+.agent-input-row input,.agent-input-row textarea{
+  width:100%;padding:10px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--bg-1);color:var(--text);font-size:14px;resize:vertical;
+}
+.agent-input-row input:focus,.agent-input-row textarea:focus{border-color:var(--accent);outline:none;}
+.agent-input-row .max-steps{width:90px;flex-shrink:0;}
+.agent-input-row .max-steps input{text-align:center;}
+.agent-submit-btn{
+  padding:10px 28px;border:none;border-radius:var(--radius-sm);
+  background:linear-gradient(135deg,var(--accent),#8b5cf6);color:#fff;font-size:14px;font-weight:600;
+  cursor:pointer;transition:all .2s;white-space:nowrap;
+}
+.agent-submit-btn:hover{transform:translateY(-1px);box-shadow:0 4px 20px rgba(139,92,246,.4);}
+.agent-submit-btn:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none;}
+.agent-log{background:var(--bg-1);border:1px solid var(--border);border-radius:var(--radius);padding:16px;max-height:500px;overflow-y:auto;font-family:var(--mono);font-size:13px;line-height:1.7;}
+.agent-log .step{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);animation:fadeIn .3s var(--ease);}
+.agent-log .step:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+.agent-log .step-num{display:inline-block;background:var(--bg-3);color:var(--text-2);padding:2px 8px;border-radius:4px;font-size:11px;margin-right:8px;font-weight:600;}
+.agent-log .step-num.error{background:var(--red-soft);color:var(--red);}
+.agent-log .step-num.success{background:var(--green-soft);color:var(--green);}
+.agent-log .thought{color:var(--text-2);margin:6px 0;}
+.agent-log .tool-name{display:inline-block;background:var(--accent-soft);color:var(--accent-2);padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;margin:4px 0;}
+.agent-log .result-preview{color:var(--text-3);font-size:12px;margin-top:4px;white-space:pre-wrap;word-break:break-all;}
+.agent-summary{background:var(--bg-2);border:1px solid var(--border-2);border-radius:var(--radius);padding:18px;margin-top:12px;display:none;}
+.agent-summary h4{color:var(--accent-2);margin-bottom:8px;font-size:14px;}
+.agent-summary .summary-text{color:var(--text);font-size:14px;line-height:1.7;white-space:pre-wrap;}
+.agent-summary .milestones{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;}
+.agent-summary .milestone{font-size:12px;padding:4px 10px;border-radius:4px;background:var(--bg-3);color:var(--text-3);font-family:var(--mono);}
+.agent-summary .milestone.hit{background:var(--green-soft);color:var(--green);}
+.agent-running-indicator{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--accent-2);margin-top:8px;}
+.agent-running-indicator .pulse{width:8px;height:8px;border-radius:50%;background:var(--accent-2);animation:pulse 1.2s infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
 
 /* ============ Progress bar ============ */
 .batch-progress{
@@ -1758,7 +1875,11 @@ td a:hover{color:var(--accent)}
       <a data-tab="applications"><span class="icon">📋</span><span>投递记录</span></a>
       <a data-tab="chat"><span class="icon">💬</span><span>聊天</span><span class="badge-count" id="navUnread" style="display:none;">0</span></a>
       <a data-tab="wechat"><span class="icon">📱</span><span>微信记录</span></a>
+      <a data-tab="transfer"><span class="icon">🔔</span><span>转人工</span><span class="badge-count" id="navTransfer" style="display:none;">0</span></a>
       <a data-tab="settings"><span class="icon">⚙</span><span>设置</span></a>
+      <a data-tab="agent"><span class="icon">🤖</span><span>AI Agent</span></a>
+      <a data-tab="kb"><span class="icon">📚</span><span>知识库</span></a>
+      <a data-tab="review"><span class="icon">📊</span><span>面试回顾</span></a>
     </nav>
     <div class="sidebar-status">
       <div class="row"><span class="dot off" id="browserDot"></span><span>浏览器 <span id="browserStatus">未启动</span></span></div>
@@ -1788,7 +1909,7 @@ td a:hover{color:var(--accent)}
         <div class="search-row">
           <div class="search-field grow">
             <label class="search-label">关键词</label>
-            <input type="text" id="searchKeyword" placeholder="搜索关键词..." value="AI Agent" class="search-input">
+            <input type="text" id="searchKeyword" placeholder="搜索关键词..." value="" class="search-input">
           </div>
           <div class="search-field">
             <label class="search-label">城市</label>
@@ -1924,7 +2045,7 @@ td a:hover{color:var(--accent)}
 
       <div class="keyword-panel">
         <span>批量关键词</span>
-        <textarea id="setSearchKeywords" rows="2" placeholder="AI Agent&#10;大模型开发&#10;AI产品经理"></textarea>
+        <textarea id="setSearchKeywords" rows="2" placeholder="Python后端&#10;前端开发&#10;产品经理"></textarea>
       </div>
 
       <div id="searchStatus"></div>
@@ -1992,7 +2113,18 @@ td a:hover{color:var(--accent)}
       </div>
     </div>
 
-    <!-- Tab 5: Settings -->
+    <!-- Tab 5: Transfer Requests -->
+    <div class="tab" id="tab-transfer">
+      <div class="section" style="padding:18px 20px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <h3 style="margin:0;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);">HR 要求转人工的会话</h3>
+          <button class="btn btn-sm" onclick="loadTransferRequests()">刷新</button>
+        </div>
+        <div id="transferRequestsList"><div class="empty"><div class="empty-icon">🔔</div>暂无转人工请求</div></div>
+      </div>
+    </div>
+
+    <!-- Tab 6: Settings -->
     <div class="tab" id="tab-settings">
       <div class="section"><h3>AI 模型配置</h3>
         <div class="setting-row"><label>平台</label><select id="setAIPlatform" onchange="onPlatformChange()"><option value="">-- 选择平台 --</option><option value="deepseek">DeepSeek</option><option value="openrouter">OpenRouter</option><option value="mimo">小米MiMo</option><option value="custom">自定义</option></select></div>
@@ -2000,6 +2132,8 @@ td a:hover{color:var(--accent)}
         <div class="setting-row"><label>Base URL</label><input type="text" id="setAIBaseUrl" placeholder="自动填充"></div>
         <div class="setting-row"><label>模型</label><input type="text" id="setAIModel" list="modelList" placeholder="选择或输入模型名" style="flex:1;"><datalist id="modelList"></datalist></div>
         <div style="font-size:11px;color:var(--text-3);margin-top:4px;font-family:var(--mono);">选择平台后自动填充Base URL和可选模型列表</div>
+        <div class="setting-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><label>使用本地模型</label><select id="setUseLocalModel"><option value="false">关闭（使用平台模型）</option><option value="true">开启（使用 Ollama 本地模型）</option></select></div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px;">开启后将跳过云端 API，直接使用本地 Ollama 模型进行面试。适用于无网络或想节省 API 费用的场景。本地模型知识面窄，会启用 RAG 知识库增强。</div>
       </div>
 
       <div class="section"><h3>个人资料</h3>
@@ -2009,7 +2143,7 @@ td a:hover{color:var(--accent)}
       </div>
 
       <div class="section"><h3>招呼语</h3>
-        <div class="setting-row"><label>模式</label><select id="setGreetingMode" onchange="toggleSmartPrompt()"><option value="template">固定模板</option><option value="smart">智能（AI 读 JD 生成 3 痛点 + 效果付费）</option></select></div>
+        <div class="setting-row"><label>模式</label><select id="setGreetingMode" onchange="toggleSmartPrompt()"><option value="template">固定模板</option><option value="smart">智能（AI 读 JD 生成个性化招呼语）</option></select></div>
         <div class="setting-row"><label>招呼语</label><textarea id="setGreeting" placeholder="{job_title} 会被替换为实际岗位名">您好！看到贵司在招{job_title}，挺感兴趣的。PS：正在和你聊天的这个AI工具是我自己开发的——就当是我的技术名片了</textarea></div>
         <div id="smartPromptRow" class="setting-row" style="display:none"><label>智能跟进 Prompt</label><textarea id="setSmartGreetingPrompt" rows="4" placeholder="留空使用默认" style="width:100%;"></textarea></div>
       </div>
@@ -2029,6 +2163,8 @@ td a:hover{color:var(--accent)}
           <div class="setting-row"><label>回复风格</label><select id="setStyle"><option value="professional">专业</option><option value="casual">轻松</option><option value="enthusiastic">热情</option></select></div>
           <div class="setting-row"><label>会话冷却(秒)</label><input type="number" id="setConversationCooldown" value="60" min="10" max="600"></div>
           <div class="setting-row"><label>系统 Prompt</label><textarea id="setReplyRules" rows="4" placeholder="留空使用默认规则" style="width:100%;"></textarea></div>
+          <h4 style="font-size:13px;margin:12px 0 6px;color:var(--text-2);">调试</h4>
+          <div class="setting-row"><label>LLM 上下文日志</label><select id="setDebugLlmContext"><option value="false">关闭</option><option value="true">开启</option></select><span style="font-size:10px;color:var(--text-3);margin-left:4px;">开启后每次AI调用会在服务端控制台打印完整上下文</span></div>
         </div>
       </div>
 
@@ -2037,6 +2173,117 @@ td a:hover{color:var(--accent)}
           <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
           <button class="btn btn-sm" onclick="doRelogin()">重新扫码登录</button>
           <span id="sessionStatus" style="font-size:10.5px;color:var(--text-3);line-height:26px;font-family:var(--mono);"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: AI Agent -->
+    <div class="tab" id="tab-agent">
+      <div class="agent-shell">
+        <div style="font-size:13px;color:var(--text-2);line-height:1.6;">
+          输入求职目标，AI Agent 会自主决策：<b>搜索岗位</b> → <b>分析JD匹配度</b> → <b>筛选</b> → <b>投递</b> → <b>汇报结果</b>。
+          每步进度实时推送，你可以观察 AI 的思考过程。
+        </div>
+
+        <div class="agent-input-row">
+          <div class="grow">
+            <label>求职目标</label>
+            <textarea id="agentGoal" rows="2" placeholder="例：帮我在广州找5个Python后端实习岗位，要求薪资12k以上，公司规模100人以上，分析JD匹配度后投递匹配度>70的"></textarea>
+          </div>
+        </div>
+        <div class="agent-input-row">
+          <div class="max-steps">
+            <label>最大步数</label>
+            <input type="number" id="agentMaxSteps" value="12" min="3" max="30">
+          </div>
+          <div style="display:flex;align-items:flex-end;gap:8px;">
+            <button class="agent-submit-btn" id="agentSubmitBtn" onclick="submitAgentGoal()">▶ 启动 Agent</button>
+            <button class="btn btn-sm" id="agentStopBtn" onclick="stopAgent()" style="display:none;" disabled>停止</button>
+          </div>
+        </div>
+
+        <div class="agent-running-indicator" id="agentRunning" style="display:none;">
+          <span class="pulse"></span> Agent 正在执行...
+        </div>
+
+        <label style="font-size:12px;color:var(--text-3);margin-top:8px;">执行日志</label>
+        <div class="agent-log" id="agentLog">
+          <div style="color:var(--text-3);font-size:13px;text-align:center;padding:30px 0;">输入目标后点击启动，Agent 的每一步思考和操作都会实时显示在这里</div>
+        </div>
+
+        <div class="agent-summary" id="agentSummary">
+          <h4>📋 执行结果</h4>
+          <div class="summary-text" id="agentSummaryText"></div>
+          <div class="milestones" id="agentMilestones"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: 知识库管理 -->
+    <div class="tab" id="tab-kb">
+      <div class="section"><h3>📚 知识库批量导入</h3>
+        <div style="font-size:12px;color:var(--text-2);line-height:1.6;margin-bottom:12px;">
+          支持两种导入模式。导入后会为每题自动生成 embedding 向量，用于面试时的语义检索。
+        </div>
+        <div class="setting-row"><label>分类</label><select id="kbCategory">
+          <option value="RAG">RAG</option><option value="Agent">Agent</option>
+          <option value="大模型">大模型</option><option value="工程化">工程化</option>
+          <option value="Python">Python</option>
+          <option value="通用">通用</option>
+        </select></div>
+        <div class="setting-row"><label>难度</label><select id="kbDifficulty">
+          <option value="medium">medium</option><option value="easy">easy</option><option value="hard">hard</option>
+        </select></div>
+        <div class="setting-row"><label>技能标签</label><input type="text" id="kbSkills" placeholder="逗号分隔，如 RAG,embedding,检索" style="flex:1;"></div>
+
+        <div style="display:flex;gap:8px;margin:12px 0;">
+          <button class="btn btn-sm" id="btnKbModeQuestions" onclick="switchKbMode('questions')" style="background:var(--accent);color:#fff;">📝 仅问题</button>
+          <button class="btn btn-sm" id="btnKbModePairs" onclick="switchKbMode('pairs')">📋 问题+答案</button>
+        </div>
+
+        <div id="kbModeQuestions">
+          <div class="setting-row"><label>问题列表</label></div>
+          <textarea id="kbQuestionsText" rows="10" placeholder="每行一个面试题，LLM 会自动生成答案（单次最多 50 题）&#10;&#10;例：&#10;RAG系统中chunk大小如何选择？&#10;向量数据库选型要考虑哪些因素？&#10;如何处理RAG中的多轮对话上下文？" style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+          <div class="setting-row" style="font-size:11px;color:var(--text-3);margin-top:2px;">每行一个问题，LLM 会自动为每题生成参考答案后写入知识库。</div>
+        </div>
+
+        <div id="kbModePairs" style="display:none;">
+          <div class="setting-row"><label>Q&A 文本</label></div>
+          <textarea id="kbPairsText" rows="12" placeholder="支持格式（单次最多 50 题）：&#10;&#10;格式1 — Q:问题 A:答案&#10;Q: RAG的核心流程是什么？&#10;A: 核心流程包括文档分块、向量化、检索、生成四个步骤...&#10;&#10;格式2 — 问：问题 答：答案&#10;问：什么是向量数据库？&#10;答：向量数据库是...&#10;&#10;格式3 — --- 分隔&#10;什么是embedding？&#10;embedding是将文本映射到...&#10;---&#10;向量检索和关键词检索有什么区别？&#10;区别在于..." style="width:100%;font-family:var(--mono);font-size:12px;"></textarea>
+          <div class="setting-row" style="font-size:11px;color:var(--text-3);margin-top:2px;">支持 Q:...A:... / 问：...答：... / --- 分隔三种格式。</div>
+        </div>
+
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px;">
+          <button class="btn btn-primary" id="btnKbImport" onclick="doKbImport()">📥 导入知识库</button>
+          <span id="kbImportStatus" style="font-size:12px;color:var(--text-3);"></span>
+        </div>
+        <div id="kbImportResult" style="margin-top:8px;font-size:12px;"></div>
+      </div>
+
+      <div class="section"><h3>📊 知识库统计</h3>
+        <div id="kbStats" style="font-size:12px;color:var(--text-3);">点击刷新查看...</div>
+        <button class="btn btn-sm" onclick="loadKbStats()" style="margin-top:6px;">🔄 刷新统计</button>
+      </div>
+
+    </div>
+
+    <!-- Tab: 面试回顾 -->
+    <div class="tab" id="tab-review">
+      <div class="section"><h3>📊 面试回顾</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:8px;">展示历史面试的评分、弱项分析和类别表现</p>
+        <div id="reviewDashboard">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+            <button class="btn btn-sm btn-primary" onclick="loadReviewDashboard()">🔄 刷新数据</button>
+            <span id="reviewLoading" style="font-size:11px;color:var(--text-3);display:none;">加载中...</span>
+          </div>
+          <div id="reviewSummary" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;"></div>
+          <div id="reviewCategoryBars" style="margin-bottom:12px;"></div>
+          <div id="reviewWeakList" style="font-size:12px;"></div>
+          <div id="reviewSessions" style="margin-top:12px;font-size:12px;">
+            <div style="font-weight:500;margin-bottom:4px;">历史会话</div>
+            <div id="reviewSessionList" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+            <div id="reviewSessionDetail" style="margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;display:none;"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2058,10 +2305,11 @@ function switchTab(tab){
     if(on){t.style.animation='none';t.offsetHeight;t.style.animation='';t.classList.add('active');}
     else{t.classList.remove('active');}
   });
-  document.getElementById('pageTitle').textContent={search:'岗位搜索',applications:'投递记录',chat:'聊天',wechat:'微信记录',settings:'设置'}[tab]||'';
+  document.getElementById('pageTitle').textContent={search:'岗位搜索',applications:'投递记录',chat:'聊天',wechat:'微信记录',transfer:'转人工',settings:'设置',agent:'AI Agent',kb:'知识库管理',review:'面试回顾'}[tab]||'';
   if(tab==='applications')loadApplications();
   if(tab==='chat')loadConversations();
   if(tab==='wechat'){loadWechatExchanges();startWechatAutoRefresh();}else{stopWechatAutoRefresh();}
+  if(tab==='transfer'){loadTransferRequests();startTransferAutoRefresh();hideTransferBadge();}else{stopTransferAutoRefresh();}
 }
 document.querySelectorAll('#sideNav a').forEach(a=>a.addEventListener('click',()=>switchTab(a.dataset.tab)));
 
@@ -2145,7 +2393,12 @@ function handleWS(msg){
     case'session_expired':document.getElementById('sessionStatus').textContent='登录已过期';toast('登录已过期','error');break;
     case'relogin_ok':document.getElementById('sessionStatus').textContent='登录态正常';toast('登录成功','success');break;
     case'wechat_exchanged':if(activeTab==='wechat')loadWechatExchanges();break;
+    case'transfer_requested':if(activeTab==='transfer')loadTransferRequests();else showTransferBadge();toast('HR 要求转人工','warn');break;
     case'monitor_paused':case'monitor_resumed':case'system':refreshStatus();break;
+    case'agent_started':onAgentStarted(msg);break;
+    case'agent_step':onAgentStep(msg);break;
+    case'agent_complete':onAgentComplete(msg);break;
+    case'agent_error':onAgentError(msg);break;
   }
 }
 
@@ -2717,7 +2970,7 @@ function renderAppPage(){
   let page=appAllJobs.slice(start,start+APP_PAGE_SIZE);
   if(!total){tbody.innerHTML='<tr><td colspan="6" class="empty">暂无记录</td></tr>';document.getElementById('appPagination').innerHTML='';return;}
   let sl={pending:'待投递',applied:'已投递',replied:'已回复',skipped:'已跳过',failed:'失败'},sb={pending:'badge-pending',applied:'badge-applied',replied:'badge-replied',skipped:'badge-skipped',failed:'badge-failed'};
-  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+(j.job_url?'<button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(j.job_url)+'\',this)">投递</button>':'')+'</td></tr>';}).join('');
+  tbody.innerHTML=page.map(j=>{let s=j.status||'pending';return'<tr><td><a href="'+attr(j.job_url)+'" target="_blank">'+esc(j.job_title||j.title||'未知')+'</a></td><td>'+esc(j.company||'')+'</td><td>'+esc(j.salary||'')+'</td><td>'+esc(j.city||'')+'</td><td><span class="badge '+sb[s]+'">'+sl[s]+'</span></td><td>'+(j.job_url?'<button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(j.job_url)+'\',this)">投递</button> <button class="btn btn-sm btn-ghost" onclick="startInterview(\''+attr(j.job_url)+'\')">面试</button>':'')+'</td></tr>';}).join('');
   document.getElementById('appPagination').innerHTML='<button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage=1;renderAppPage()">«</button><button '+(appCurrentPage<=1?'disabled':'')+' onclick="appCurrentPage--;renderAppPage()">‹</button><span>'+(start+1)+'-'+Math.min(start+APP_PAGE_SIZE,total)+' / '+total+'</span><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage++;renderAppPage()">›</button><button '+(appCurrentPage>=totalPages?'disabled':'')+' onclick="appCurrentPage=totalPages;renderAppPage()">»</button>';
 }
 
@@ -2725,7 +2978,7 @@ function loadShortlists(){
   fetch('/api/shortlists').then(r=>r.json()).then(d=>{
     let tbody=document.getElementById('appTableBody'),sl=d.shortlists||[];
     if(!sl.length){tbody.innerHTML='<tr><td colspan="6" class="empty">暂无收藏</td></tr>';return;}
-    tbody.innerHTML=sl.map(s=>'<tr><td><a href="'+attr(s.job_url)+'" target="_blank">'+esc(s.job_title)+'</a></td><td>'+esc(s.company||'')+'</td><td>'+esc(s.salary||'')+'</td><td>'+esc(s.city||'')+'</td><td><span class="badge badge-applied">收藏</span></td><td><button class="btn btn-sm" onclick="removeShortlist('+s.id+',this)">取消</button> <button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(s.job_url)+'\',this)">投递</button></td></tr>').join('');
+    tbody.innerHTML=sl.map(s=>'<tr><td><a href="'+attr(s.job_url)+'" target="_blank">'+esc(s.job_title)+'</a></td><td>'+esc(s.company||'')+'</td><td>'+esc(s.salary||'')+'</td><td>'+esc(s.city||'')+'</td><td><span class="badge badge-applied">收藏</span></td><td><button class="btn btn-sm" onclick="removeShortlist('+s.id+',this)">取消</button> <button class="btn btn-sm btn-primary" onclick="applyOne(\''+attr(s.job_url)+'\',this)">投递</button> <button class="btn btn-sm btn-ghost" onclick="startInterview(\''+attr(s.job_url)+'\')">面试</button></td></tr>').join('');
   });
 }
 function removeShortlist(id,btn){fetch('/api/shortlists/'+id,{method:'DELETE'}).then(()=>{loadShortlists();toast('已取消收藏','info',1500);});}
@@ -2834,6 +3087,43 @@ function startWechatAutoRefresh(){
 function stopWechatAutoRefresh(){if(wechatRefreshTimer){clearInterval(wechatRefreshTimer);wechatRefreshTimer=null;}}
 function copyWechat(text,btn){navigator.clipboard.writeText(text).then(()=>{btn.textContent='已复制';btn.classList.add('btn-success');btn.classList.remove('btn-primary');setTimeout(()=>{btn.textContent='复制';btn.classList.remove('btn-success');btn.classList.add('btn-primary');},1500);toast('已复制微信号','success',1200);});}
 
+function loadTransferRequests(){
+  fetch('/api/transfer-requests').then(r=>r.json()).then(d=>{
+    let el=document.getElementById('transferRequestsList'),reqs=d.requests||[];
+    if(!reqs.length){el.innerHTML='<div class="empty"><div class="empty-icon">🔔</div>暂无转人工请求</div>';return;}
+    el.innerHTML=reqs.map(r=>{
+      let t=r.transfer_requested_at?new Date(r.transfer_requested_at).toLocaleString('zh-CN'):'';
+      let last=r.last_message_text?'<div class="desc">'+esc(r.last_message_text)+'</div>':'';
+      return'<div class="transfer-request-card" onclick="viewTransferConversation('+r.id+')"><div class="row"><div style="flex:1;">'
+        +'<div class="who">'+esc(r.hr_name)+' <span style="font-size:11px;color:var(--text-3);font-weight:400;">'+esc(r.hr_company||'')+'</span></div>'
+        +'<div style="font-size:12px;color:var(--text-2);margin-top:2px;">'+esc(r.job_title||'')+'</div>'
+        +last
+        +'</div><div class="meta">'+t+'</div></div></div>';
+    }).join('');
+  });
+}
+function viewTransferConversation(id){
+  switchTab('chat');
+  setTimeout(()=>{selectConversation(id);},300);
+}
+let transferRefreshTimer=null;
+function startTransferAutoRefresh(){
+  stopTransferAutoRefresh();
+  transferRefreshTimer=setInterval(()=>{if(activeTab==='transfer')loadTransferRequests();},30000);
+}
+function stopTransferAutoRefresh(){if(transferRefreshTimer){clearInterval(transferRefreshTimer);transferRefreshTimer=null;}}
+let transferBadgeCount=0;
+function showTransferBadge(){
+  transferBadgeCount++;
+  let el=document.getElementById('navTransfer');
+  if(el){el.style.display='';el.textContent=transferBadgeCount;}
+}
+function hideTransferBadge(){
+  transferBadgeCount=0;
+  let el=document.getElementById('navTransfer');
+  if(el){el.style.display='none';el.textContent='0';}
+}
+
 function batchApplyAll(maxPages){
   maxPages=maxPages||1;
   let pending=currentSearchJobs.filter(j=>j.job_url&&j.status!=='applied'&&j.status!=='replied');
@@ -2916,6 +3206,8 @@ function loadSettings(){
     setVal('inactiveDays',s.max_hr_inactive_days||'7');
     setVal('setConversationCooldown',s.conversation_cooldown_sec||'60');
     setVal('setReplyRules',s.reply_rules_system_prompt||'');
+    setVal('setDebugLlmContext',s.debug_llm_context||'false');
+    setVal('setUseLocalModel',s.use_local_model||'false');
     setVal('setSmartGreetingPrompt',s.smart_greeting_prompt||'');
     if(!document.getElementById('setSmartGreetingPrompt').value){
       document.getElementById('setSmartGreetingPrompt').value = [
@@ -2967,7 +3259,7 @@ function toggleSmartPrompt(){
   if(row) row.style.display = document.getElementById('setGreetingMode').value === 'smart' ? 'block' : 'none';
 }
 function saveSettings(){
-  let data={greeting_mode:document.getElementById('setGreetingMode').value,greeting_template:document.getElementById('setGreeting').value,smart_greeting_prompt:document.getElementById('setSmartGreetingPrompt').value,user_location:document.getElementById('setLocation').value,ai_reply_style:document.getElementById('setStyle').value,daily_apply_limit:document.getElementById('setDailyLimit').value,min_reply_delay_sec:document.getElementById('setMinDelay').value,max_reply_delay_sec:document.getElementById('setMaxDelay').value,resume_summary:document.getElementById('setResume').value,wechat_id:document.getElementById('setWechat').value,search_keywords:document.getElementById('setSearchKeywords').value.replace(/\n/g,','),auto_reply_enabled:document.getElementById('setAutoReply').value,ai_base_url:document.getElementById('setAIBaseUrl').value,ai_model:document.getElementById('setAIModel').value,max_hr_inactive_days:document.getElementById('setMaxHrInactiveDays').value,filter_inactive_hr:document.getElementById('setFilterInactiveHr').value,dedup_company_by_default:document.getElementById('setDedupByDefault').value,conversation_cooldown_sec:document.getElementById('setConversationCooldown').value,reply_rules_system_prompt:document.getElementById('setReplyRules').value};
+  let data={greeting_mode:document.getElementById('setGreetingMode').value,greeting_template:document.getElementById('setGreeting').value,smart_greeting_prompt:document.getElementById('setSmartGreetingPrompt').value,user_location:document.getElementById('setLocation').value,ai_reply_style:document.getElementById('setStyle').value,daily_apply_limit:document.getElementById('setDailyLimit').value,min_reply_delay_sec:document.getElementById('setMinDelay').value,max_reply_delay_sec:document.getElementById('setMaxDelay').value,resume_summary:document.getElementById('setResume').value,wechat_id:document.getElementById('setWechat').value,search_keywords:document.getElementById('setSearchKeywords').value.replace(/\n/g,','),auto_reply_enabled:document.getElementById('setAutoReply').value,ai_base_url:document.getElementById('setAIBaseUrl').value,ai_model:document.getElementById('setAIModel').value,max_hr_inactive_days:document.getElementById('setMaxHrInactiveDays').value,filter_inactive_hr:document.getElementById('setFilterInactiveHr').value,dedup_company_by_default:document.getElementById('setDedupByDefault').value,conversation_cooldown_sec:document.getElementById('setConversationCooldown').value,reply_rules_system_prompt:document.getElementById('setReplyRules').value,debug_llm_context:document.getElementById('setDebugLlmContext').value,use_local_model:document.getElementById('setUseLocalModel').value};
   let key=document.getElementById('setAIApiKey').value;if(key)data.ai_api_key=key;
   fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r=>r.json()).then(()=>{
     toast('设置已保存','success');
@@ -2984,6 +3276,492 @@ function onPlatformChange(){
   if(cfg.models.length){cfg.models.forEach(m=>dl.innerHTML+='<option value="'+m.v+'">'+m.t+'</option>');input.value=cfg.models[0].v;input.placeholder='选择或输入模型名';}
   else{input.value='';input.placeholder='输入模型名...';}
 }
+
+/* ===== Agent ===== */
+let agentRunning=false,agentSteps=[];
+
+async function submitAgentGoal(){
+  if(agentRunning)return;
+  const goal=document.getElementById('agentGoal').value.trim();
+  if(!goal || goal.length<5){toast('请输入至少5个字的求职目标','warn');return;}
+
+  const maxSteps=parseInt(document.getElementById('agentMaxSteps').value)||12;
+  const log=document.getElementById('agentLog');
+  const summary=document.getElementById('agentSummary');
+
+  agentRunning=true;agentSteps=[];
+  document.getElementById('agentSubmitBtn').disabled=true;
+  document.getElementById('agentStopBtn').style.display='';
+  document.getElementById('agentStopBtn').disabled=false;
+  document.getElementById('agentRunning').style.display='flex';
+  summary.style.display='none';
+  log.innerHTML='';
+
+  try{
+    const resp=await fetch('/api/agent/run',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({goal,max_steps:maxSteps,auto_execute:true})
+    });
+    if(!resp.ok){
+      const err=await resp.json().catch(()=>({}));
+      throw new Error(err.detail||'请求失败 ('+resp.status+')');
+    }
+    const result=await resp.json();
+    if(agentRunning){
+      renderAgentSummary(result.summary||'任务已结束',result.milestones||{});
+      agentRunning=false;
+    }
+  }catch(e){
+    toast('Agent 执行失败: '+(e.message||'网络错误'),'error');
+    log.innerHTML+='<div class="step"><span class="step-num error">✗</span><span style="color:var(--red);">'+esc(e.message||'执行失败')+'</span></div>';
+    agentRunning=false;
+  }finally{
+    document.getElementById('agentSubmitBtn').disabled=false;
+    document.getElementById('agentStopBtn').style.display='none';
+    document.getElementById('agentStopBtn').disabled=true;
+    document.getElementById('agentRunning').style.display='none';
+  }
+}
+
+function stopAgent(){
+  agentRunning=false;
+  document.getElementById('agentSubmitBtn').disabled=false;
+  document.getElementById('agentStopBtn').style.display='none';
+  document.getElementById('agentRunning').style.display='none';
+  toast('Agent 已停止（服务器端仍会继续）','info',2000);
+}
+
+function onAgentStarted(msg){
+  const log=document.getElementById('agentLog');
+  log.innerHTML='<div class="step"><span class="step-num">▶</span><span class="thought">目标: <b>'+esc(msg.goal||'')+'</b></span><span style="color:var(--text-3);font-size:11px;">  最大步数: '+(msg.max_steps||'?')+'</span></div>';
+}
+
+function onAgentStep(msg){
+  const log=document.getElementById('agentLog');
+  const cls=msg.result_preview&&msg.result_preview.startsWith('错误')?'error':'success';
+  let html='<div class="step">';
+  html+='<span class="step-num '+cls+'">#'+msg.step+'</span>';
+  if(msg.tool)html+='<span class="tool-name">'+esc(msg.tool)+'</span>';
+  if(msg.thought)html+='<div class="thought">'+esc(msg.thought)+'</div>';
+  if(msg.result_preview)html+='<div class="result-preview">'+esc(msg.result_preview)+'</div>';
+  html+='</div>';
+  log.innerHTML+=html;
+  log.scrollTop=log.scrollHeight;
+}
+
+function onAgentComplete(msg){
+  agentRunning=false;
+  document.getElementById('agentSubmitBtn').disabled=false;
+  document.getElementById('agentStopBtn').style.display='none';
+  document.getElementById('agentStopBtn').disabled=true;
+  document.getElementById('agentRunning').style.display='none';
+  if(msg.summary)renderAgentSummary(msg.summary,{});
+  toast('Agent 执行完毕','success');
+}
+
+function onAgentError(msg){
+  agentRunning=false;
+  document.getElementById('agentSubmitBtn').disabled=false;
+  document.getElementById('agentStopBtn').style.display='none';
+  document.getElementById('agentRunning').style.display='none';
+  const log=document.getElementById('agentLog');
+  log.innerHTML+='<div class="step"><span class="step-num error">✗</span><span style="color:var(--red);">'+esc(msg.message||'执行出错')+'</span></div>';
+  log.scrollTop=log.scrollHeight;
+  toast('Agent 出错: '+(msg.message||'未知错误'),'error');
+}
+
+function renderAgentSummary(text,milestones){
+  const summary=document.getElementById('agentSummary');
+  document.getElementById('agentSummaryText').textContent=text;
+  let mhtml='';
+  if(milestones&&Object.keys(milestones).length){
+    const labels={searched:'搜索岗位',companies_previewed:'公司画像',analyzed:'JD分析',resume_optimized:'简历优化',chat_suggestion_generated:'沟通建议',applied:'已投递',batch_applied:'批量投递',reply_generated:'已生成回复'};
+    for(const[k,v]of Object.entries(milestones)){
+      mhtml+='<span class="milestone'+(v?' hit':'')+'">'+(v?'✅ ':'⬜ ')+((labels[k]||k))+'</span>';
+    }
+  }
+  document.getElementById('agentMilestones').innerHTML=mhtml;
+  summary.style.display='block';
+}
+
+// ══════ 模拟面试 ══════
+let _ivSession=null,_ivJobUrl='';
+
+function startInterview(jobUrl){
+  if(!jobUrl){toast('缺少岗位链接','error');return;}
+  _ivJobUrl=jobUrl;
+  // 创建 Modal
+  let overlay=document.createElement('div');
+  overlay.className='iv-modal-overlay';overlay.id='ivOverlay';
+  overlay.innerHTML=`<div class="iv-modal">
+    <div class="iv-modal-head"><div><h3>🤖 模拟面试</h3><div class="iv-meta" id="ivMeta">正在初始化...</div></div><button class="iv-close" onclick="closeInterview()">&times;</button></div>
+    <div class="iv-chat" id="ivChat"><div class="iv-loading"><span class="spinner"></span>正在生成面试题...</div></div>
+    <div class="iv-input-row" id="ivInput" style="display:none;"><textarea id="ivAnswer" placeholder="输入你的回答... (Enter 发送, Shift+Enter 换行)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitInterviewAnswer();}"></textarea><button class="btn btn-primary btn-sm" onclick="submitInterviewAnswer()">发送</button></div>
+    <div class="iv-actions" id="ivActions" style="display:none;"><button class="btn btn-danger btn-sm" onclick="endInterview()">结束面试</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click',e=>{if(e.target===overlay)closeInterview();});
+  // 调 API 启动
+  fetch('/api/interview/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_url:jobUrl})})
+    .then(r=>r.json()).then(d=>{
+      if(d.detail){toast('启动失败: '+d.detail,'error');closeInterview();return;}
+      _ivSession=d.session_id;
+      document.getElementById('ivMeta').textContent=(d.job_title||'通用面试')+' · 对话式';
+      let chat=document.getElementById('ivChat');
+      chat.innerHTML='';
+      addChatBubble('interviewer','🤖 面试官',d.message);
+      document.getElementById('ivInput').style.display='flex';
+      document.getElementById('ivActions').style.display='flex';
+      document.getElementById('ivAnswer').focus();
+    }).catch(e=>{toast('启动失败: '+e.message,'error');closeInterview();});
+}
+
+async function resumeInterview(sessionId){
+  // 创建 Modal
+  let overlay=document.createElement('div');
+  overlay.className='iv-modal-overlay';overlay.id='ivOverlay';
+  overlay.innerHTML=`<div class="iv-modal">
+    <div class="iv-modal-head"><div><h3>🤖 模拟面试（继续）</h3><div class="iv-meta" id="ivMeta">正在恢复会话...</div></div><button class="iv-close" onclick="closeInterview()">&times;</button></div>
+    <div class="iv-chat" id="ivChat"><div class="iv-loading"><span class="spinner"></span>正在恢复对话...</div></div>
+    <div class="iv-input-row" id="ivInput" style="display:none;"><textarea id="ivAnswer" placeholder="输入你的回答... (Enter 发送, Shift+Enter 换行)" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitInterviewAnswer();}"></textarea><button class="btn btn-primary btn-sm" onclick="submitInterviewAnswer()">发送</button></div>
+    <div class="iv-actions" id="ivActions" style="display:none;"><button class="btn btn-sm" onclick="skipInterviewQuestion()">跳过</button><button class="btn btn-danger btn-sm" onclick="endInterview()">结束面试</button></div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click',e=>{if(e.target===overlay)closeInterview();});
+
+  try{
+    const resp=await fetch('/api/interview/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:sessionId})});
+    const d=await resp.json();
+    if(d.detail){toast('恢复失败: '+d.detail,'error');closeInterview();return;}
+
+    _ivSession=d.session_id;
+    document.getElementById('ivMeta').textContent='已恢复 · 第'+(d.question_count||0)+'轮';
+    let chat=document.getElementById('ivChat');
+    chat.innerHTML='';
+
+    // 渲染历史对话
+    if(d.history&&d.history.length){
+      d.history.forEach(m=>{
+        if(m.role==='assistant')addChatBubble('interviewer','🤖 面试官',m.content);
+        else if(m.role==='user')addChatBubble('user','👤 你',m.content);
+      });
+    }
+
+    document.getElementById('ivInput').style.display='flex';
+    document.getElementById('ivActions').style.display='flex';
+    document.getElementById('ivAnswer').focus();
+    chat.scrollTop=chat.scrollHeight;
+  }catch(e){
+    toast('恢复失败: '+e.message,'error');closeInterview();
+  }
+}
+
+function submitInterviewAnswer(){
+  if(!_ivSession)return;
+  let ta=document.getElementById('ivAnswer'),answer=ta.value.trim();
+  if(!answer){toast('请输入回答','warn');return;}
+  ta.disabled=true;
+  let btn=document.querySelector('#ivInput .btn-primary');btn.disabled=true;
+  let btnEnd=document.querySelector('#ivActions .btn-danger');btnEnd.disabled=true;
+  // 显示用户回答
+  addChatBubble('user','👤 你',answer);
+  ta.value='';
+  // 加载状态
+  let chat=document.getElementById('ivChat');
+  let loadEl=document.createElement('div');loadEl.className='iv-loading';loadEl.id='ivGradeLoading';
+  loadEl.innerHTML='<span class="spinner"></span>面试官正在思考...';
+  chat.appendChild(loadEl);chat.scrollTop=chat.scrollHeight;
+  // 调 API
+  fetch('/api/interview/answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:_ivSession,answer:answer})})
+    .then(r=>r.json()).then(d=>{
+      let loadEl2=document.getElementById('ivGradeLoading');if(loadEl2)loadEl2.remove();
+      if(d.detail){toast(d.detail,'error');ta.disabled=false;btn.disabled=false;btnEnd.disabled=false;return;}
+      // 显示面试官回复（评价 + 追问合并在一条消息中）
+      addChatBubble('interviewer','🤖 面试官',d.reply);
+      if(d.want_to_end){
+        addSystemMsg('面试已结束');
+        ta.style.display='none';btn.style.display='none';btnEnd.style.display='none';
+      } else {
+        ta.disabled=false;btn.disabled=false;btnEnd.disabled=false;
+        ta.focus();
+      }
+    }).catch(e=>{let loadEl2=document.getElementById('ivGradeLoading');if(loadEl2)loadEl2.remove();toast('处理失败: '+e.message,'error');ta.disabled=false;btn.disabled=false;btnEnd.disabled=false;});
+}
+
+function skipInterviewQuestion(){
+  if(!_ivSession)return;
+  addSystemMsg('跳过当前话题...');
+  let ta=document.getElementById('ivAnswer');if(ta)ta.disabled=true;
+  let btn=document.querySelector('#ivInput .btn-primary');if(btn)btn.disabled=true;
+  fetch('/api/interview/skip',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:_ivSession})})
+    .then(r=>r.json()).then(d=>{
+      if(d.detail){toast(d.detail,'error');if(ta)ta.disabled=false;if(btn)btn.disabled=false;return;}
+      if(d.reply){
+        addChatBubble('interviewer','🤖 面试官',d.reply);
+        if(d.want_to_end){
+          addSystemMsg('面试已结束');
+          if(ta)ta.style.display='none';if(btn)btn.style.display='none';
+        } else {
+          if(ta){ta.disabled=false;ta.focus();}
+          if(btn)btn.disabled=false;
+        }
+      }
+    }).catch(e=>{toast('跳过失败: '+e.message,'error');if(ta)ta.disabled=false;if(btn)btn.disabled=false;});
+}
+
+function endInterview(){
+  if(_ivSession)doEndInterview();
+  else closeInterview();
+}
+
+function doEndInterview(){
+  let ta=document.getElementById('ivAnswer');if(ta)ta.disabled=true;
+  document.getElementById('ivInput').style.display='none';
+  document.getElementById('ivActions').style.display='none';
+  let chat=document.getElementById('ivChat');
+  let loadEl=document.createElement('div');loadEl.className='iv-loading';loadEl.id='ivEndLoading';
+  loadEl.innerHTML='<span class="spinner"></span>正在生成面试总结...';
+  chat.appendChild(loadEl);chat.scrollTop=chat.scrollHeight;
+  fetch('/api/interview/end',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_id:_ivSession})})
+    .then(r=>r.json()).then(d=>{
+      let loadEl2=document.getElementById('ivEndLoading');if(loadEl2)loadEl2.remove();
+      _ivSession=null;
+      if(d.summary)renderInterviewSummary(d.summary);
+      else toast('生成总结失败','error');
+    }).catch(e=>{let loadEl2=document.getElementById('ivEndLoading');if(loadEl2)loadEl2.remove();toast('生成总结失败: '+e.message,'error');});
+}
+
+function closeInterview(){
+  // 不自动结束面试——会话已持久化到 SQLite，可以在回顾页继续
+  let overlay=document.getElementById('ivOverlay');
+  if(overlay)overlay.remove();
+  _ivSession=null;_ivJobUrl='';
+}
+
+function addChatBubble(role,label,text){
+  let chat=document.getElementById('ivChat');
+  let cls=role==='interviewer'?'iv-bubble-q':'iv-bubble-a';
+  let html='<div class="iv-bubble '+cls+'"><div class="iv-bubble-label">'+esc(label)+'</div>'+esc(text)+'</div>';
+  chat.insertAdjacentHTML('beforeend',html);
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function addSystemMsg(text){
+  let chat=document.getElementById('ivChat');
+  chat.insertAdjacentHTML('beforeend','<div style="align-self:center;font-size:12px;color:var(--text-3);padding:6px 12px;">'+esc(text)+'</div>');
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function renderInterviewSummary(summary){
+  let chat=document.getElementById('ivChat');
+  let lowHtml='';
+  if(summary.low_scores&&summary.low_scores.length){
+    lowHtml='<div class="iv-summary-low"><strong>薄弱环节：</strong><br>'+summary.low_scores.map(r=>'· '+esc(r.question||'').substring(0,60)+' (得分: '+r.score+')').join('<br>')+'</div>';
+  }
+  let statsHtml='';
+  if(summary.total_questions){
+    statsHtml='<div class="iv-summary-stats">'
+      +'<div class="iv-summary-stat"><div class="val">'+summary.total_questions+'</div><div class="lbl">总轮数</div></div>';
+    if(summary.avg_score) statsHtml+='<div class="iv-summary-stat"><div class="val">'+(summary.avg_score||0).toFixed(1)+'</div><div class="lbl">平均分</div></div>';
+    if(summary.max_score) statsHtml+='<div class="iv-summary-stat"><div class="val">'+(summary.max_score||0).toFixed(1)+'</div><div class="lbl">最高分</div></div>';
+    if(summary.min_score) statsHtml+='<div class="iv-summary-stat"><div class="val">'+(summary.min_score||0).toFixed(1)+'</div><div class="lbl">最低分</div></div>';
+    statsHtml+='</div>';
+  }
+  let html='<div class="iv-summary"><h4>📊 面试总结</h4>'+statsHtml+lowHtml+'<div class="iv-summary-review">'+esc(summary.review||summary.message||'')+'</div>'
+    +'<div style="margin-top:16px;text-align:center;"><button class="btn btn-ghost btn-sm" onclick="closeInterview()">关闭</button></div></div>';
+  chat.insertAdjacentHTML('beforeend',html);
+  chat.scrollTop=chat.scrollHeight;
+}
+
+// ══════ 知识库管理 ══════
+let _kbMode='questions';
+function switchKbMode(mode){
+  _kbMode=mode;
+  document.getElementById('kbModeQuestions').style.display=mode==='questions'?'block':'none';
+  document.getElementById('kbModePairs').style.display=mode==='pairs'?'block':'none';
+  document.getElementById('btnKbModeQuestions').style.background=mode==='questions'?'var(--accent)':'';
+  document.getElementById('btnKbModeQuestions').style.color=mode==='questions'?'#fff':'';
+  document.getElementById('btnKbModePairs').style.background=mode==='pairs'?'var(--accent)':'';
+  document.getElementById('btnKbModePairs').style.color=mode==='pairs'?'#fff':'';
+}
+
+function doKbImport(){
+  let category=document.getElementById('kbCategory').value;
+  let difficulty=document.getElementById('kbDifficulty').value;
+  let skills=document.getElementById('kbSkills').value;
+  let statusEl=document.getElementById('kbImportStatus');
+  let resultEl=document.getElementById('kbImportResult');
+  let btn=document.getElementById('btnKbImport');
+
+  let text='';
+  if(_kbMode==='questions'){
+    text=document.getElementById('kbQuestionsText').value.trim();
+  }else{
+    text=document.getElementById('kbPairsText').value.trim();
+  }
+
+  if(!text){toast('请输入内容','warn');return;}
+  if(!category){toast('请选择分类','warn');return;}
+
+  btn.disabled=true;statusEl.textContent='⏳ 正在导入...';resultEl.innerHTML='';
+
+  let url=_kbMode==='questions'?'/api/qa/import-questions':'/api/qa/import-pairs';
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({category:category,text:text,difficulty:difficulty,skills:skills})})
+    .then(r=>r.json()).then(d=>{
+      if(d.detail){toast(d.detail,'error');statusEl.textContent='';btn.disabled=false;return;}
+      statusEl.textContent='';
+      resultEl.innerHTML='<div style="color:var(--green);">✅ 成功导入 <b>'+d.imported+'</b> 条'+(d.failed>0?', <span style="color:var(--red);">失败 '+d.failed+' 条</span>':'')+'</div>';
+      btn.disabled=false;
+      if(_kbMode==='questions')document.getElementById('kbQuestionsText').value='';
+      else document.getElementById('kbPairsText').value='';
+      loadKbStats();
+    }).catch(e=>{toast('导入失败: '+e.message,'error');statusEl.textContent='';btn.disabled=false;});
+}
+
+function loadKbStats(){
+  let el=document.getElementById('kbStats');
+  el.innerHTML='<span class="spinner"></span> 加载中...';
+  fetch('/api/qa/categories').then(r=>r.json()).then(d=>{
+    let cats=d.qa_categories||[];
+    el.innerHTML=cats.length?'分类: '+cats.map(c=>'<b>'+esc(c)+'</b>').join(', '):'暂无数据';
+  }).catch(()=>{el.innerHTML='加载失败';});
+}
+
+// ══════ 面试回顾 ══════
+async function loadReviewDashboard(){
+  const loading=document.getElementById('reviewLoading');
+  loading.style.display='inline';
+  try{
+    const [waResp, sessResp] = await Promise.all([
+      fetch('/api/review/weak-areas?limit=10'),
+      fetch('/api/review/sessions')
+    ]);
+    const wa=await waResp.json();
+    const sess=await sessResp.json();
+    const weakAreas=wa.weak_areas||[];
+    const catScores=wa.category_scores||[];
+
+    if(!weakAreas.length && (!sess.sessions||!sess.sessions.length)){
+      document.getElementById('reviewSummary').innerHTML='<p style="color:var(--text-3);font-size:12px;">暂无面试记录，开始一次模拟面试后数据会出现在这里</p>';
+      document.getElementById('reviewCategoryBars').innerHTML='';
+      document.getElementById('reviewWeakList').innerHTML='';
+      loading.style.display='none';
+      return;
+    }
+
+    let totalQ=0,totalS=0,minS=10,maxS=0;
+    weakAreas.forEach(w=>{totalQ++;totalS+=w.score;if(w.score>maxS)maxS=w.score;if(w.score<minS)minS=w.score;});
+    const avgS=totalQ?(totalS/totalQ).toFixed(1):'--';
+
+    document.getElementById('reviewSummary').innerHTML=
+      `<div class="review-stat"><div class="value">${totalQ}</div><div class="label">总答题</div></div>
+       <div class="review-stat"><div class="value">${avgS}</div><div class="label">均分</div></div>
+       <div class="review-stat"><div class="value">${maxS||'--'}</div><div class="label">最高</div></div>
+       <div class="review-stat"><div class="value">${minS===10?'--':minS}</div><div class="label">最低</div></div>
+       <div class="review-stat"><div class="value">${(sess.sessions||[]).length}</div><div class="label">面试次数</div></div>`;
+
+    // 类别柱状图
+    const cats=['RAG','Agent','大模型','工程化','Python'];
+    const defaultW={RAG:0.30,Agent:0.25,'大模型':0.20,'工程化':0.15,Python:0.10};
+    let barsHTML='';
+    cats.forEach(cat=>{
+      const found=catScores.find(cs=>cs.category===cat);
+      const avg=found?parseFloat(found.avg_score).toFixed(1):null;
+      const count=found?found.count:0;
+      const bar=(avg!==null?Math.max(5,avg*10):2);
+      const barColor=avg!==null?(avg<5?'var(--red)':avg<6?'var(--orange)':avg<7?'var(--accent)':'var(--green)'):'var(--border)';
+      barsHTML+=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <span style="width:56px;font-size:11px;">${cat}</span>
+        <span style="width:36px;font-size:11px;color:var(--text-3);text-align:right;">${avg||'--'}分</span>
+        <span style="font-size:10px;color:var(--text-3);width:24px;">${count}题</span>
+        <div style="flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+          <div style="height:100%;width:${bar}%;background:${barColor};border-radius:3px;"></div>
+        </div>
+      </div>`;
+    });
+    document.getElementById('reviewCategoryBars').innerHTML=barsHTML;
+
+    // 低分题目
+    document.getElementById('reviewWeakList').innerHTML=weakAreas.slice(0,5).map(w=>{
+      const cls=w.score>=7?'score-high':w.score>=5?'score-mid':'score-low';
+      const catTag=w.category?`<span class="tag tag-${(w.category||'').toLowerCase()}" style="font-size:10px;">${esc(w.category)}</span>`:'';
+      return `<div class="prop-group" style="margin-bottom:6px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <span style="flex:1;font-size:11px;">${esc((w.question||'').substring(0,100))}</span>
+          ${catTag}
+          <span class="${cls}" style="font-weight:700;font-size:13px;">${w.score}</span>
+        </div>
+        <div style="font-size:10px;color:var(--text-3);">${esc((w.feedback||'').substring(0,120))}</div>
+      </div>`;
+    }).join('')||'<span style="color:var(--text-3);font-size:11px;">暂无低分记录</span>';
+
+    // 会话列表
+    const sList=document.getElementById('reviewSessionList');
+    if(sess.sessions&&sess.sessions.length){
+      sList.innerHTML=sess.sessions.slice(0,20).map(s=>{
+        const sid=s.session_id||s;
+        const jf=(s.job_focus||'').substring(0,30);
+        const rc=s.round_count||s.question_count||0;
+        const status=s.status||'ended';
+        const activeTag=status==='active'?'<span style="color:var(--green);font-weight:700;">● 进行中</span>':'<span style="color:var(--text-3);">○ 已结束</span>';
+        const resumeBtn=status==='active'?`<button class="btn btn-sm btn-primary" onclick="resumeInterview('${sid}')" style="font-size:10px;padding:2px 8px;">▶ 继续</button>`:'';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border);">
+          <button class="btn btn-sm" onclick="loadReviewSessionDetail('${sid}')" id="rv-btn-${sid}" style="font-size:11px;">📋 ${sid.substring(0,8)}...</button>
+          <span style="font-size:10px;color:var(--text-2);flex:1;">${esc(jf)} · ${rc}轮</span>
+          ${activeTag}
+          ${resumeBtn}
+        </div>`;
+      }).join('');
+    }else{sList.innerHTML='<span style="color:var(--text-3);">暂无</span>';}
+
+  }catch(e){
+    document.getElementById('reviewSummary').innerHTML='<p style="color:var(--red);font-size:11px;">加载失败: '+e.message+'</p>';
+  }
+  loading.style.display='none';
+}
+
+async function loadReviewSessionDetail(sid){
+  document.querySelectorAll('#reviewSessionList button').forEach(b=>{b.style.background='';b.style.color='';});
+  const btn=document.getElementById('rv-btn-'+sid);
+  if(btn){btn.style.background='var(--accent)';btn.style.color='#fff';}
+  const el=document.getElementById('reviewSessionDetail');
+  try{
+    const resp=await fetch('/api/review/session/'+sid);
+    const d=await resp.json();
+    if(d.total_questions>0){
+      el.style.display='block';
+      el.innerHTML=`<div style="font-weight:500;margin-bottom:8px;">📋 ${sid.substring(0,12)}... — ${d.total_questions}题 均分${d.avg_score} 最高${d.max_score} 最低${d.min_score}</div>
+        <div style="font-size:10px;color:var(--text-3);margin-bottom:8px;">按时间倒序排列，最近的对话在最上面</div>
+        ${(d.records||[]).slice().reverse().map((r,i)=>{
+          const cls=r.score>=7?'score-high':r.score>=5?'score-mid':'score-low';
+          const catTag=r.category?`<span class="tag tag-${(r.category||'').toLowerCase()}" style="font-size:10px;">${esc(r.category)}</span>`:'';
+          const roundNum = (d.records||[]).length - i;
+          return `<div style="padding:8px 0;border-bottom:1px solid var(--border);">
+            <div style="font-size:10px;color:var(--text-3);margin-bottom:3px;">第 ${roundNum} 轮 · ${catTag} · <span class="${cls}" style="font-weight:700;">得分 ${r.score}</span></div>
+            <div style="font-size:12px;color:var(--text-1);margin-bottom:4px;"><b>❓ 问题：</b>${esc((r.question||''))}</div>
+            <div style="font-size:12px;color:var(--text-1);margin-bottom:4px;"><b>💬 你的回答：</b>${esc((r.user_answer||'').substring(0,300))}${(r.user_answer||'').length>300?'…':''}</div>
+            ${r.feedback?`<div style="font-size:11px;color:var(--text-3);"><b>📝 面试官评价：</b>${esc(r.feedback.substring(0,200))}</div>`:''}
+          </div>`;
+        }).join('')}`;
+    }else{
+      el.style.display='block';
+      el.innerHTML='<span style="color:var(--text-3);font-size:11px;">该会话暂无详细记录</span>';
+    }
+  }catch(e){
+    el.style.display='block';
+    el.innerHTML='<span style="color:var(--red);font-size:11px;">加载失败: '+e.message+'</span>';
+  }
+}
+
+// 切到知识库/面试回顾 tab 时自动加载
+const _origSwitchTab=switchTab;
+switchTab=function(tab){
+  _origSwitchTab(tab);
+  if(tab==='kb'){loadKbStats();}
+  if(tab==='review'){loadReviewDashboard();}
+};
+
 </script>
 <!-- Smart Send Modal -->
 <div class="analyze-modal-overlay" id="smartSendModal" style="display:none;">

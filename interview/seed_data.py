@@ -7,7 +7,6 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from ollama_client import llm_chat
 from db import add_qa_pair
 
 
