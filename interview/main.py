@@ -115,6 +115,7 @@ def learn_ask(req: LearnQuestion):
         "layer": result.get("layer", -1),
         "elapsed_ms": result.get("elapsed_ms", 0),
         "related": result.get("related", []),
+        "recall_detail": result.get("recall_detail", {}),
     }
 
 

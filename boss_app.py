@@ -13,6 +13,7 @@ import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List
 from urllib.parse import urljoin
@@ -175,6 +176,33 @@ async def _run_pw(fn, *args):
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_playwright_executor, _wrapper)
+
+
+@asynccontextmanager
+async def _lock_browser():
+    """上下文管理器：暂停监控 + 获取浏览器锁，确保不跟 chat_monitor 争夺资源。
+    任何异常都会安全释放锁和恢复监控状态。
+
+    用法:
+        async with _lock_browser():
+            ...
+    """
+    global monitor_paused, browser_sync_lock
+    was_paused = monitor_paused
+    monitor_paused = True
+    try:
+        for _ in range(20):
+            await asyncio.sleep(0.5)
+            if browser_sync_lock is None or not browser_sync_lock.locked():
+                break
+        if browser_sync_lock is None:
+            browser_sync_lock = asyncio.Lock()
+        await browser_sync_lock.acquire()
+        yield
+    finally:
+        if browser_sync_lock and browser_sync_lock.locked():
+            browser_sync_lock.release()
+        monitor_paused = was_paused
 
 
 # BOSS直聘城市代码（按省份分组）
@@ -892,12 +920,9 @@ def list_jobs(status: Optional[str] = None, limit: int = 100):
 
 @app.post("/api/jobs/search")
 async def search_jobs(req: SearchRequest):
-    global monitor_paused
     if not automation or automation.page is None:
         raise HTTPException(status_code=503, detail="浏览器未启动，请先到设置Tab点击「启动浏览器」")
-    was_paused = monitor_paused
-    monitor_paused = True
-    try:
+    async with _lock_browser():
         city_code = CITY_MAP.get(req.city or get_setting("default_city", "全国"), "100010000")
         try:
             # 合并 company_size 列表/字符串两路来源（前端可用 list，旧 CLI 可用 str）
@@ -1010,8 +1035,6 @@ async def search_jobs(req: SearchRequest):
         except Exception:
             pass
         return {"jobs_found": len(jobs), "saved": len(saved_ids), "jobs": result_jobs}
-    finally:
-        monitor_paused = was_paused
 
 
 # ══════════════════════════════════════
@@ -1231,102 +1254,117 @@ async def api_companies_smart_send(req: SmartSendRequest):
     req.targets: [{company, job_url, hr_name, hr_title}]
     req.confirm 必须为 true。
     """
+    global monitor_paused, browser_sync_lock
     if not automation or automation.page is None:
         raise HTTPException(status_code=503, detail="浏览器未启动")
     if not req.confirm:
         return {"success": False, "message": "需要 confirm=true 才执行"}
+    # 暂停监控 + 获取浏览器锁（手动 acquire/release，避免大规模缩进）
+    was_paused = monitor_paused
+    monitor_paused = True
+    for _ in range(20):
+        await asyncio.sleep(0.5)
+        if browser_sync_lock is None or not browser_sync_lock.locked():
+            break
+    if browser_sync_lock is None:
+        browser_sync_lock = asyncio.Lock()
+    await browser_sync_lock.acquire()
+    try:
+        targets = req.targets or []
+        if not targets:
+            # 兼容旧的单条模式
+            if req.job_url:
+                targets = [
+                    {
+                        "company": req.company or "",
+                        "job_url": req.job_url,
+                        "hr_name": req.hr_name or (req.top_hr or {}).get("name", ""),
+                        "hr_title": (req.top_hr or {}).get("title", ""),
+                    }
+                ]
+            else:
+                raise HTTPException(status_code=400, detail="缺少 targets 或 job_url")
 
-    targets = req.targets or []
-    if not targets:
-        # 兼容旧的单条模式
-        if req.job_url:
-            targets = [
-                {
-                    "company": req.company or "",
-                    "job_url": req.job_url,
-                    "hr_name": req.hr_name or (req.top_hr or {}).get("name", ""),
-                    "hr_title": (req.top_hr or {}).get("title", ""),
-                }
-            ]
-        else:
-            raise HTTPException(status_code=400, detail="缺少 targets 或 job_url")
+        daily_limit = int(get_setting("daily_apply_limit", "15"))
+        results = []
+        applied_count = 0
+        skipped_count = 0
 
-    daily_limit = int(get_setting("daily_apply_limit", "15"))
-    results = []
-    applied_count = 0
-    skipped_count = 0
+        for t in targets:
+            if get_today_application_count() >= daily_limit:
+                results.append({"company": t.get("company"), "status": "skipped", "reason": "日投递上限"})
+                skipped_count += 1
+                continue
 
-    for t in targets:
-        if get_today_application_count() >= daily_limit:
-            results.append({"company": t.get("company"), "status": "skipped", "reason": "日投递上限"})
-            skipped_count += 1
-            continue
+            job_url = (t.get("job_url") or "").strip()
+            if not job_url:
+                results.append({"company": t.get("company"), "status": "skipped", "reason": "无 job_url"})
+                skipped_count += 1
+                continue
 
-        job_url = (t.get("job_url") or "").strip()
-        if not job_url:
-            results.append({"company": t.get("company"), "status": "skipped", "reason": "无 job_url"})
-            skipped_count += 1
-            continue
+            hr_name = (t.get("hr_name") or "").strip()
+            company_name = (t.get("company") or "").strip()
+            job_record = get_application_by_url(job_url) or {}
+            job_title = job_record.get("job_title") or "该岗位"
+            job_desc = job_record.get("description") or ""
+            is_boss = bool(t.get("is_boss") or job_record.get("is_boss"))
+            style = get_setting("ai_reply_style", "professional")
+            resume = get_setting("resume_summary", "")
 
-        hr_name = (t.get("hr_name") or "").strip()
-        company_name = (t.get("company") or "").strip()
-        job_record = get_application_by_url(job_url) or {}
-        job_title = job_record.get("job_title") or "该岗位"
-        job_desc = job_record.get("description") or ""
-        is_boss = bool(t.get("is_boss") or job_record.get("is_boss"))
-        style = get_setting("ai_reply_style", "professional")
-        resume = get_setting("resume_summary", "")
+            # AI 个性化招呼语（失败自动回退模板），在 PW 线程外生成（纯 HTTP 调用）
+            greeting = await asyncio.to_thread(
+                generate_greeting_ai,
+                job_title,
+                company_name,
+                hr_name,
+                job_desc,
+                is_boss,
+                style,
+                resume,
+            )
 
-        # AI 个性化招呼语（失败自动回退模板），在 PW 线程外生成（纯 HTTP 调用）
-        greeting = await asyncio.to_thread(
-            generate_greeting_ai,
-            job_title,
-            company_name,
-            hr_name,
-            job_desc,
-            is_boss,
-            style,
-            resume,
+            try:
+                result = await _run_pw(automation.apply_to_job, job_url, greeting)
+                if result.get("success"):
+                    applied_count += 1
+                    results.append(
+                        {
+                            "company": company_name,
+                            "job_title": job_title,
+                            "hr_name": hr_name,
+                            "status": "success",
+                            "application_id": result.get("application_id"),
+                            "already_applied": result.get("already_applied", False),
+                        }
+                    )
+                else:
+                    results.append(
+                        {"company": company_name, "status": "failed", "reason": result.get("message", "投递失败")}
+                    )
+            except Exception as e:
+                results.append({"company": company_name, "status": "failed", "reason": str(e)})
+
+        # 广播 WS：让前端的投递漏斗/统计/会话列表实时刷新（与普通批量投递一致）
+        await broadcast_ws(
+            {
+                "type": "batch_complete",
+                "total": len(targets),
+                "success": applied_count,
+            }
         )
 
-        try:
-            result = await _run_pw(automation.apply_to_job, job_url, greeting)
-            if result.get("success"):
-                applied_count += 1
-                results.append(
-                    {
-                        "company": company_name,
-                        "job_title": job_title,
-                        "hr_name": hr_name,
-                        "status": "success",
-                        "application_id": result.get("application_id"),
-                        "already_applied": result.get("already_applied", False),
-                    }
-                )
-            else:
-                results.append(
-                    {"company": company_name, "status": "failed", "reason": result.get("message", "投递失败")}
-                )
-        except Exception as e:
-            results.append({"company": company_name, "status": "failed", "reason": str(e)})
-
-    # 广播 WS：让前端的投递漏斗/统计/会话列表实时刷新（与普通批量投递一致）
-    await broadcast_ws(
-        {
-            "type": "batch_complete",
+        return {
+            "success": applied_count > 0,
+            "applied": applied_count,
+            "skipped": skipped_count,
             "total": len(targets),
-            "success": applied_count,
+            "message": f"批量投递完成：{applied_count} 成功 / {skipped_count} 跳过 / {len(targets)} 总计",
+            "results": results,
         }
-    )
-
-    return {
-        "success": applied_count > 0,
-        "applied": applied_count,
-        "skipped": skipped_count,
-        "total": len(targets),
-        "message": f"批量投递完成：{applied_count} 成功 / {skipped_count} 跳过 / {len(targets)} 总计",
-        "results": results,
-    }
+    finally:
+        if browser_sync_lock and browser_sync_lock.locked():
+            browser_sync_lock.release()
+        monitor_paused = was_paused
 
 
 @app.get("/api/jobs/{job_id}")
@@ -1353,75 +1391,75 @@ async def skip_job(job_id: int):
 async def apply_to_job(req: ApplyRequest):
     if not automation:
         raise HTTPException(status_code=503, detail="浏览器未启动")
+    async with _lock_browser():
+        daily_limit = int(get_setting("daily_apply_limit", "15"))
+        if get_today_application_count() >= daily_limit:
+            raise HTTPException(status_code=429, detail="已达到今日投递上限")
 
-    daily_limit = int(get_setting("daily_apply_limit", "15"))
-    if get_today_application_count() >= daily_limit:
-        raise HTTPException(status_code=429, detail="已达到今日投递上限")
+        greeting = req.greeting
+        if not greeting:
+            job = get_application_by_url(req.job_url)
+            title = job["job_title"] if job else "相关岗位"
+            company = job["company"] if job else "贵公司"
+            job_desc = (job or {}).get("description", "") if job else ""
+            is_boss = bool((job or {}).get("is_boss")) if job else False
+            style = get_setting("ai_reply_style", "professional")
+            resume = get_setting("resume_summary", "")
+            # 注入简历优化建议，让招呼语更贴合JD
+            opt_hints = ""
+            if job:
+                try:
+                    import json as _json
 
-    greeting = req.greeting
-    if not greeting:
-        job = get_application_by_url(req.job_url)
-        title = job["job_title"] if job else "相关岗位"
-        company = job["company"] if job else "贵公司"
-        job_desc = (job or {}).get("description", "") if job else ""
-        is_boss = bool((job or {}).get("is_boss")) if job else False
-        style = get_setting("ai_reply_style", "professional")
-        resume = get_setting("resume_summary", "")
-        # 注入简历优化建议，让招呼语更贴合JD
-        opt_hints = ""
-        if job:
-            try:
-                import json as _json
+                    _opt = job.get("optimize_result") or ""
+                    if _opt:
+                        _opt_data = _json.loads(_opt) if isinstance(_opt, str) else _opt
+                        parts = []
+                        if _opt_data.get("one_line"):
+                            parts.append("核心定位: " + _opt_data["one_line"])
+                        if _opt_data.get("match_gaps"):
+                            parts.append("匹配差距: " + ", ".join(_opt_data["match_gaps"][:3]))
+                        if _opt_data.get("optimize_tips"):
+                            for t in _opt_data.get("optimize_tips", [])[:2]:
+                                parts.append(f"{t.get('area', '')}: {t.get('suggestion', '')}")
+                        opt_hints = "\n".join(parts)
+                except Exception:
+                    pass
+            greeting = await asyncio.to_thread(
+                generate_greeting_ai, title, company, "", job_desc, is_boss, style, resume, opt_hints
+            )
 
-                _opt = job.get("optimize_result") or ""
-                if _opt:
-                    _opt_data = _json.loads(_opt) if isinstance(_opt, str) else _opt
-                    parts = []
-                    if _opt_data.get("one_line"):
-                        parts.append("核心定位: " + _opt_data["one_line"])
-                    if _opt_data.get("match_gaps"):
-                        parts.append("匹配差距: " + ", ".join(_opt_data["match_gaps"][:3]))
-                    if _opt_data.get("optimize_tips"):
-                        for t in _opt_data.get("optimize_tips", [])[:2]:
-                            parts.append(f"{t.get('area', '')}: {t.get('suggestion', '')}")
-                    opt_hints = "\n".join(parts)
-            except Exception:
-                pass
-        greeting = await asyncio.to_thread(
-            generate_greeting_ai, title, company, "", job_desc, is_boss, style, resume, opt_hints
-        )
-
-    # 在后台线程运行（Playwright 是同步的）
-    result = await _run_pw(automation.apply_to_job, req.job_url, greeting)
-    if result.get("success"):
-        await broadcast_ws(
-            {
-                "type": "apply_complete",
-                "job_url": req.job_url,
-                "job_id": result.get("application_id"),
-            }
-        )
-    return result
+        # 在后台线程运行（Playwright 是同步的）
+        result = await _run_pw(automation.apply_to_job, req.job_url, greeting)
+        if result.get("success"):
+            await broadcast_ws(
+                {
+                    "type": "apply_complete",
+                    "job_url": req.job_url,
+                    "job_id": result.get("application_id"),
+                }
+            )
+        return result
 
 
 @app.post("/api/jobs/apply-batch")
 async def apply_batch(req: ApplyBatchRequest):
     if not automation:
         raise HTTPException(status_code=503, detail="浏览器未启动")
+    async with _lock_browser():
+        daily_limit = int(get_setting("daily_apply_limit", "15"))
+        remaining = daily_limit - get_today_application_count()
+        urls = req.job_urls[: max(1, remaining)]
 
-    daily_limit = int(get_setting("daily_apply_limit", "15"))
-    remaining = daily_limit - get_today_application_count()
-    urls = req.job_urls[: max(1, remaining)]
-
-    results = await _run_pw(automation.apply_batch, urls, req.greeting)
-    await broadcast_ws(
-        {
-            "type": "batch_complete",
-            "total": len(results),
-            "success": sum(1 for r in results if r.get("success")),
-        }
-    )
-    return {"results": results}
+        results = await _run_pw(automation.apply_batch, urls, req.greeting)
+        await broadcast_ws(
+            {
+                "type": "batch_complete",
+                "total": len(results),
+                "success": sum(1 for r in results if r.get("success")),
+            }
+        )
+        return {"results": results}
 
 
 @app.post("/api/jobs/scan")
@@ -1429,40 +1467,40 @@ async def scan_current_page():
     """扫描当前BOSS搜索结果页面，提取所有可见岗位，保存到数据库并返回。"""
     if not automation or automation.page is None:
         raise HTTPException(status_code=503, detail="浏览器未启动，请先到设置Tab点击「启动浏览器」")
+    async with _lock_browser():
+        try:
+            jobs = await _run_pw(automation.scan_current_page)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"扫描失败: {e}")
 
-    try:
-        jobs = await _run_pw(automation.scan_current_page)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"扫描失败: {e}")
-
-    saved_ids = []
-    result_jobs = []
-    for j in jobs:
-        j["url"] = _normalize_job_url(j.get("url", ""))
-        if j.get("url"):
-            existing = get_application_by_url(j["url"])
-            if existing:
-                updated = update_application_from_job(existing["id"], j) or existing
-                saved_ids.append(updated["id"])
-                result_jobs.append(_search_job_payload(j, updated))
-            else:
-                aid = add_application(j)
-                if aid:
-                    saved_ids.append(aid)
-                    result_jobs.append(_search_job_payload(j, get_application(aid)))
+        saved_ids = []
+        result_jobs = []
+        for j in jobs:
+            j["url"] = _normalize_job_url(j.get("url", ""))
+            if j.get("url"):
+                existing = get_application_by_url(j["url"])
+                if existing:
+                    updated = update_application_from_job(existing["id"], j) or existing
+                    saved_ids.append(updated["id"])
+                    result_jobs.append(_search_job_payload(j, updated))
                 else:
-                    result_jobs.append(_search_job_payload(j))
-        else:
-            result_jobs.append(_search_job_payload(j))
+                    aid = add_application(j)
+                    if aid:
+                        saved_ids.append(aid)
+                        result_jobs.append(_search_job_payload(j, get_application(aid)))
+                    else:
+                        result_jobs.append(_search_job_payload(j))
+            else:
+                result_jobs.append(_search_job_payload(j))
 
-    await broadcast_ws(
-        {
-            "type": "scan_complete",
-            "found": len(jobs),
-            "saved": len(saved_ids),
-        }
-    )
-    return {"jobs_found": len(jobs), "saved": len(saved_ids), "jobs": result_jobs}
+        await broadcast_ws(
+            {
+                "type": "scan_complete",
+                "found": len(jobs),
+                "saved": len(saved_ids),
+            }
+        )
+        return {"jobs_found": len(jobs), "saved": len(saved_ids), "jobs": result_jobs}
 
 
 @app.post("/api/jobs/scan-and-apply")
@@ -1470,20 +1508,20 @@ async def scan_and_apply(req: ScanAndApplyRequest = ScanAndApplyRequest()):
     """扫描当前页面全部岗位 → 一键批量投递。"""
     if not automation:
         raise HTTPException(status_code=503, detail="浏览器未启动")
+    async with _lock_browser():
+        daily_limit = int(get_setting("daily_apply_limit", "15"))
+        if get_today_application_count() >= daily_limit:
+            raise HTTPException(status_code=429, detail="已达到今日投递上限")
 
-    daily_limit = int(get_setting("daily_apply_limit", "15"))
-    if get_today_application_count() >= daily_limit:
-        raise HTTPException(status_code=429, detail="已达到今日投递上限")
-
-    result = await _run_pw(automation.scan_and_apply_current_page, req.greeting)
-    await broadcast_ws(
-        {
-            "type": "scan_apply_complete",
-            "scanned": result.get("scanned", 0),
-            "applied": result.get("applied", 0),
-        }
-    )
-    return result
+        result = await _run_pw(automation.scan_and_apply_current_page, req.greeting)
+        await broadcast_ws(
+            {
+                "type": "scan_apply_complete",
+                "scanned": result.get("scanned", 0),
+                "applied": result.get("applied", 0),
+            }
+        )
+        return result
 
 
 @app.post("/api/jobs/analyze")
@@ -2551,6 +2589,33 @@ async def qa_categories():
     finally:
         conn.close()
 
+
+@app.post("/api/qa/ask")
+async def qa_ask(req: dict):
+    """知识库问答：RAG 检索 + 多路召回 + 融合排序"""
+    import sys, os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "interview"))
+    from fast_qa import fast_answer
+
+    question = (req.get("question") or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="问题不能为空")
+
+    result = fast_answer(question)
+    return {
+        "question": question,
+        "answer": result["answer"],
+        "matched_question": result.get("matched", ""),
+        "category": result.get("category", ""),
+        "topic": result.get("topic"),
+        "confidence": result.get("confidence", "high"),
+        "note": result.get("note", ""),
+        "layer": result.get("layer", -1),
+        "elapsed_ms": result.get("elapsed_ms", 0),
+        "related": result.get("related", []),
+        "recall_detail": result.get("recall_detail", {}),
+    }
+
 # ══════════════════════════════════════
 #  面试回顾 — 历史记录 & 弱项分析
 # ══════════════════════════════════════
@@ -2653,7 +2718,7 @@ async def agent_run(req: AgentRunRequest):
     Agent 会根据 goal 自主决策：搜索 → 分析 → 筛选 → 投递 → 总结。
     每步进度通过 WebSocket 实时推送（type: agent_step）。
     """
-    global monitor_paused
+    global monitor_paused, browser_sync_lock
 
     if not req.goal or len(req.goal.strip()) < 5:
         raise HTTPException(status_code=400, detail="goal 太短，请描述你的求职目标")
@@ -2671,15 +2736,16 @@ async def agent_run(req: AgentRunRequest):
     except Exception:
         pass
 
-    # 暂停监控循环，避免和 Agent 冲突
+    # 暂停监控 + 获取浏览器锁
     was_paused = monitor_paused
     monitor_paused = True
-    # 等待当前监控循环安全退出（最长等 10 秒）
     for _ in range(20):
         await asyncio.sleep(0.5)
         if browser_sync_lock is None or not browser_sync_lock.locked():
             break
-
+    if browser_sync_lock is None:
+        browser_sync_lock = asyncio.Lock()
+    await browser_sync_lock.acquire()
     try:
         # 构建 ToolRegistry
         ToolContext.init(automation=automation, run_pw=_run_pw)
@@ -2736,6 +2802,8 @@ async def agent_run(req: AgentRunRequest):
         })
         raise HTTPException(status_code=500, detail=f"Agent 执行失败: {e}")
     finally:
+        if browser_sync_lock and browser_sync_lock.locked():
+            browser_sync_lock.release()
         monitor_paused = was_paused
 
 
@@ -2780,7 +2848,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 async def chat_monitor_loop():
     """后台轮询聊天消息 + 自动回复。带 session 心跳保活。"""
-    global automation
+    global automation, browser_sync_lock
     await asyncio.sleep(3)  # 启动后简短等待
 
     if automation:

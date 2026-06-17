@@ -320,8 +320,7 @@ GREETING_SYSTEM_PROMPT = """你是求职者本人，正在BOSS直聘上给招聘
 - 紧扣对方岗位（岗位名/JD要点）说明你为什么感兴趣、你哪点匹配
 - 不要夸张吹捧，不要列技能清单，不要说"贵公司"这种过于书面的词，用"咱们/你们"更自然
 - 不出现微信/电话/QQ等联系方式（BOSS会拦截整条消息）
-- 如果对方很可能是老板本人（boss_hint=true），语气可以更直接、更有诚意地表达想聊聊
-- 末尾可以带一句轻量的："顺便说下，正在跟你聊的这个自动回复是我自己开发的AI，算我的技术名片"——仅当岗位与AI/开发/技术相关时才加，否则不要加
+- 末尾可以带一句轻量的："顺便说下，正在跟你聊的这个自动回复是我自己开发的AI，算我的技术名片"——仅当岗位与AI/开发/技术相关时才加，否则不要加。
 - 只输出招呼语正文，不要任何解释、不要引号、不要JSON"""
 
 
@@ -352,6 +351,7 @@ def generate_greeting_ai(
         f"ai_enabled={ai_greeting_on!r} mode={greeting_mode_dbg!r} "
         f"has_desc={bool(job_desc)} desc_len={len(job_desc or '')}"
     )
+    #判断是否启用智能模板
     if ai_greeting_on != "true":
         print(f"[greeting] → 模板 (ai_greeting_enabled={ai_greeting_on!r})")
         return generate_greeting(job_title, company, style=style, hr_name=hr_name)
@@ -372,7 +372,7 @@ def generate_greeting_ai(
             system_prompt, user_prompt = _build_smart_prompts(
                 job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints
             )
-            print(f"[greeting] → smart 模式 prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
+            print(f"[greeting] →---- smart 模式 ---- prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
             print(f"[greeting] system_prompt: {system_prompt}")
             print(f"[greeting] user_prompt: {user_prompt}")
         else:
@@ -380,7 +380,7 @@ def generate_greeting_ai(
             user_prompt = _build_generic_prompt(
                 job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints
             )
-            print(f"[greeting] → generic 模式 prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
+            print(f"[greeting] → ----generic 模式 ----prompt 长度 sys={len(system_prompt)} user={len(user_prompt)}")
             print(f"[greeting] system_prompt: {system_prompt}")
             print(f"[greeting] user_prompt: {user_prompt}")
 
@@ -478,7 +478,6 @@ def _build_smart_prompts(job_title, company, hr_name, job_desc, is_boss, resume_
         "- 方向和能力必须从下面提供的JD中提取，禁止编造不相关内容\n"
         f"- 称呼：{hr_name or '不带称呼'}\n"
         f"- 风格：{style_hint}\n"
-        f"- 是否老板：{'true' if is_boss else 'false'}\n\n"
         f"=== 用户规则 ===\n{user_rules}\n"
     )
 

@@ -1879,6 +1879,7 @@ td a:hover{color:var(--accent)}
       <a data-tab="settings"><span class="icon">⚙</span><span>设置</span></a>
       <a data-tab="agent"><span class="icon">🤖</span><span>AI Agent</span></a>
       <a data-tab="kb"><span class="icon">📚</span><span>知识库</span></a>
+      <a data-tab="qa-ask"><span class="icon">💬</span><span>知识库问答</span></a>
       <a data-tab="review"><span class="icon">📊</span><span>面试回顾</span></a>
     </nav>
     <div class="sidebar-status">
@@ -2267,6 +2268,69 @@ td a:hover{color:var(--accent)}
 
     </div>
 
+    <!-- Tab: 知识库问答 -->
+    <div class="tab" id="tab-qa-ask">
+      <div class="section">
+        <h3>💬 知识库问答</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:12px;">
+          基于 RAG 检索增强生成，多路召回 + 融合排序，检索知识库中的面试题并给出答案
+        </p>
+
+        <!-- 输入区 -->
+        <div style="display:flex;gap:8px;margin-bottom:16px;">
+          <input id="qaAskInput" type="text" placeholder="输入技术问题，如：RAG 和微调有什么区别？"
+                 style="flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:6px;
+                        background:var(--bg);color:var(--text);font-size:14px;"
+                 onkeydown="if(event.key==='Enter')qaAsk()">
+          <button class="btn btn-primary" onclick="qaAsk()" style="white-space:nowrap;padding:10px 20px;">
+            🔍 提问
+          </button>
+        </div>
+
+        <!-- 加载动画 -->
+        <div id="qaAskLoading" style="display:none;text-align:center;padding:24px;">
+          <div style="display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--text-2);">
+            <span class="spinner" style="width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:spin 0.6s linear infinite;"></span>
+            <span id="qaAskLoadingText">检索中...</span>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--text-3);" id="qaAskLoadingDetail"></div>
+        </div>
+
+        <!-- 结果区 -->
+        <div id="qaAskResult" style="display:none;">
+          <!-- 一问一答 -->
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:4px;display:flex;gap:8px;align-items:center;">
+              <span id="qaAskQ"></span>
+              <span id="qaAskBadge" style="font-size:10px;padding:2px 6px;border-radius:4px;"></span>
+            </div>
+            <div id="qaAskA" style="font-size:14px;line-height:1.7;padding:12px;background:var(--bg);border-radius:8px;border-left:3px solid var(--accent);"></div>
+          </div>
+
+          <!-- 检索详情 -->
+          <details id="qaAskDetail" style="margin-bottom:12px;font-size:12px;">
+            <summary style="cursor:pointer;color:var(--text-2);font-weight:500;">🔬 检索链路详情</summary>
+            <div style="margin-top:8px;padding:10px;background:var(--bg);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--text-2);line-height:1.8;">
+              <div><b>来源层:</b> <span id="qaDetailLayer">-</span></div>
+              <div><b>话题:</b> <span id="qaDetailTopic">-</span></div>
+              <div><b>匹配题目:</b> <span id="qaDetailMatched">-</span></div>
+              <div><b>置信度:</b> <span id="qaDetailConfidence">-</span></div>
+              <div><b>改写后查询:</b> <span id="qaDetailRewritten">-</span></div>
+              <div><b>召回通道:</b> <span id="qaDetailChannels">-</span></div>
+              <div><b>融合候选:</b> <span id="qaDetailFusion">-</span></div>
+              <div><b>耗时拆解:</b> <span id="qaDetailTiming">-</span></div>
+            </div>
+          </details>
+
+          <!-- 相关问题 -->
+          <div id="qaAskRelated" style="display:none;">
+            <div style="font-size:11px;color:var(--text-3);margin-bottom:6px;">🔗 相关问题</div>
+            <div id="qaAskRelatedList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Tab: 面试回顾 -->
     <div class="tab" id="tab-review">
       <div class="section"><h3>📊 面试回顾</h3>
@@ -2305,7 +2369,7 @@ function switchTab(tab){
     if(on){t.style.animation='none';t.offsetHeight;t.style.animation='';t.classList.add('active');}
     else{t.classList.remove('active');}
   });
-  document.getElementById('pageTitle').textContent={search:'岗位搜索',applications:'投递记录',chat:'聊天',wechat:'微信记录',transfer:'转人工',settings:'设置',agent:'AI Agent',kb:'知识库管理',review:'面试回顾'}[tab]||'';
+  document.getElementById('pageTitle').textContent={search:'岗位搜索',applications:'投递记录',chat:'聊天',wechat:'微信记录',transfer:'转人工',settings:'设置',agent:'AI Agent',kb:'知识库管理','qa-ask':'知识库问答',review:'面试回顾'}[tab]||'';
   if(tab==='applications')loadApplications();
   if(tab==='chat')loadConversations();
   if(tab==='wechat'){loadWechatExchanges();startWechatAutoRefresh();}else{stopWechatAutoRefresh();}
@@ -3626,6 +3690,123 @@ function loadKbStats(){
     let cats=d.qa_categories||[];
     el.innerHTML=cats.length?'分类: '+cats.map(c=>'<b>'+esc(c)+'</b>').join(', '):'暂无数据';
   }).catch(()=>{el.innerHTML='加载失败';});
+}
+
+// ══════ 知识库问答 ══════
+
+function qaAskLoading(show, text){
+  const el=document.getElementById('qaAskLoading');
+  if(el){el.style.display=show?'block':'none';}
+  if(text){document.getElementById('qaAskLoadingText').textContent=text;}
+}
+
+async function qaAsk(){
+  const q=document.getElementById('qaAskInput').value.trim();
+  if(!q)return;
+
+  // 显示加载
+  document.getElementById('qaAskResult').style.display='none';
+  qaAskLoading(true,'检索中...');
+  document.getElementById('qaAskLoadingDetail').textContent='';
+
+  const t0=performance.now();
+  const progress=['查询改写','话题分类','多路召回','融合排序','生成回答'];
+  let step=0;
+  const progTimer=setInterval(()=>{
+    if(step<progress.length){
+      document.getElementById('qaAskLoadingText').textContent=progress[step]+'...';
+      document.getElementById('qaAskLoadingDetail').textContent=`步骤 ${step+1}/${progress.length}`;
+      step++;
+    }
+  },300);
+
+  try{
+    const resp=await fetch('/api/qa/ask',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({question:q})
+    });
+    clearInterval(progTimer);
+    const data=await resp.json();
+    const totalMs=Math.round(performance.now()-t0);
+
+    qaAskLoading(false);
+
+    // 显示结果
+    document.getElementById('qaAskResult').style.display='block';
+    document.getElementById('qaAskQ').textContent='❓ '+data.question;
+    document.getElementById('qaAskA').innerHTML=(data.note
+      ?'<div style="background:var(--border);border-radius:6px;padding:8px 12px;margin-bottom:12px;font-size:12px;color:var(--orange);">⚠️ '+data.note+'</div>'
+      :'')+data.answer;
+
+    // 来源标签
+    const layerMap={0:'⚡缓存',1:'🎯精确匹配',2:'🔍语义检索',3:'📋预置回答',4:'🤖AI生成'};
+    const confMap={high:['var(--green)','高置信度'],medium:['var(--orange)','中置信度'],low:['var(--red)','低置信度']};
+    const conf=confMap[data.confidence]||['var(--text-3)',data.confidence];
+    const badge=document.getElementById('qaAskBadge');
+    badge.textContent=(layerMap[data.layer]||'L'+data.layer)+' · '+conf[1];
+    badge.style.cssText='background:'+conf[0]+'20;color:'+conf[0]+';';
+    document.getElementById('qaAskA').scrollIntoView({behavior:'smooth',block:'nearest'});
+
+    // 检索链路详情
+    const layerNames={0:'缓存命中',1:'精确匹配(L1)',2:'多路融合(L2)',3:'预置回答(L3)',4:'DeepSeek兜底(L4)'};
+    document.getElementById('qaDetailLayer').textContent=layerNames[data.layer]||('Layer '+data.layer);
+    document.getElementById('qaDetailTopic').textContent=data.topic||'未分类';
+    document.getElementById('qaDetailMatched').textContent=data.matched_question||'-';
+    document.getElementById('qaDetailConfidence').textContent=data.confidence+(data.similarity!=null?' (sim='+Number(data.similarity).toFixed(3)+')':'');
+
+    const rd=data.recall_detail||{};
+    if(rd.rewritten_query){
+      document.getElementById('qaDetailRewritten').textContent=rd.rewritten_query+(rd.rewrite_ms?' ('+rd.rewrite_ms+'ms)':'');
+    }else{
+      document.getElementById('qaDetailRewritten').textContent='未改写';
+    }
+    const chs=rd.recall_channels||{};
+    document.getElementById('qaDetailChannels').textContent=Object.keys(chs).length>0
+      ?Object.entries(chs).map(([k,v])=>k+':'+v+'条').join(' | ')
+      :'-';
+    document.getElementById('qaDetailFusion').textContent=rd.fusion_candidates!=null
+      ?rd.fusion_candidates+'条候选项, top融合分='+(rd.top_fusion_score||0).toFixed(4)
+      :'-';
+    const timing=[];
+    if(rd.rewrite_ms)timing.push('改写'+rd.rewrite_ms+'ms');
+    if(rd.recall_ms!=null)timing.push('召回'+rd.recall_ms+'ms');
+    if(rd.rerank_ms!=null)timing.push('排序'+rd.rerank_ms+'ms');
+    timing.push('总计'+data.elapsed_ms+'ms');
+    document.getElementById('qaDetailTiming').textContent=timing.join(' → ');
+
+    // 显示/隐藏检索详情
+    const detail=document.getElementById('qaAskDetail');
+    detail.style.display=(data.layer===1||data.layer===3)?'none':'';
+
+    // 相关问题
+    if(data.related&&data.related.length>0){
+      document.getElementById('qaAskRelated').style.display='block';
+      const list=document.getElementById('qaAskRelatedList');
+      list.innerHTML=data.related.map(r=>{
+        // 同时支持 {question,id} 和 {q,id} 两种字段名
+        const qText=r.question||r.q||'';
+        if(!qText)return'';
+        return'<button class="btn btn-sm" style="font-size:12px;margin:2px;" '+
+          'onclick="qaFollowUp(\''+qText.replace(/'/g,"\\'")+'\')">'+qText+'</button>';
+      }).filter(Boolean).join('');
+    }else{
+      document.getElementById('qaAskRelated').style.display='none';
+    }
+  }catch(e){
+    clearInterval(progTimer);
+    qaAskLoading(false);
+    document.getElementById('qaAskResult').style.display='block';
+    document.getElementById('qaAskQ').textContent='❓ '+q;
+    document.getElementById('qaAskA').innerHTML='<span style="color:var(--red);">请求失败: '+e.message+'</span>';
+    document.getElementById('qaAskRelated').style.display='none';
+    document.getElementById('qaAskDetail').style.display='none';
+  }
+}
+
+function qaFollowUp(qText){
+  document.getElementById('qaAskInput').value=qText;
+  qaAsk();
 }
 
 // ══════ 面试回顾 ══════

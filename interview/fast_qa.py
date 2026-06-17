@@ -1,6 +1,12 @@
 """
-面试问答Agent - 快速检索层（V2）
+面试问答Agent - 快速检索层（V3）
 学习模式：用户提问，系统在2-3秒内给出答案
+
+V3改进：
+1. 查询改写：口语化问题 LLM 改写为标准化检索关键词
+2. 多路并行召回：全文检索 ‖ 关键词LIKE ‖ embedding语义，三通道并行
+3. RRF融合排序：Reciprocal Rank Fusion + 多通道加分 + 关键词重叠加权
+4. 低置信度二次检索：融合结果关键词重叠<0.18 自动降级 DeepSeek
 
 V2改进：
 1. Layer 0.5: 话题分类（关键词+规则，不调LLM，5ms内）
@@ -11,9 +17,10 @@ V2改进：
 import json, time, re
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
-from llm_client import get_embedding, cosine_similarity
+from llm_client import get_embedding, cosine_similarity, llm_chat_deepseek
 from mysql_config import get_conn
 
 SEMANTIC_MATCH_THRESHOLD = 0.65
@@ -48,6 +55,55 @@ class LRUCache:
 
 
 query_cache = LRUCache(capacity=200)
+
+
+# ===== 共享工具 =====
+
+def _extract_keywords(text: str) -> List[str]:
+    """从文本提取检索关键词：CJK双字词 + 英文术语"""
+    cjk = re.findall(r"[一-鿿]{2,}", text)
+    eng = re.findall(r"[a-zA-Z][a-zA-Z0-9+#.-]{1,}", text)
+    return cjk + eng
+
+
+# ===== Query Rewriting: 口语化问题 → 检索关键词 =====
+
+def rewrite_query(question: str, timeout: float = 5.0) -> str:
+    """将口语化面试问题改写为标准化检索关键词，提取核心技术术语"""
+    # 短问题或已偏关键词风格的不改写
+    if len(question) <= 10:
+        return question
+    eng_ratio = len(re.findall(r"[a-zA-Z]", question)) / max(len(question), 1)
+    if eng_ratio > 0.5:
+        return question
+
+    def _do_rewrite() -> str:
+        prompt = (
+            "将以下口语化面试问题改写为简洁的检索关键词（15字以内），"
+            "提取核心技术术语，去除语气词和冗余描述：\n\n"
+            f"问题：{question}\n\n"
+            "只输出改写后的关键词文本，不要引号、不要解释。"
+        )
+        rewritten = llm_chat_deepseek(
+            [{"role": "user", "content": prompt}], temperature=0.1
+        )
+        return rewritten.strip().strip('"').strip("'").strip()
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(_do_rewrite)
+            rewritten = future.result(timeout=timeout)
+        if len(rewritten) < 2 or len(rewritten) > 60 or rewritten == question:
+            return question
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] 📝 查询改写: "
+            f'"{question[:50]}" → "{rewritten}"'
+        )
+        return rewritten
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚠️ 查询改写失败: {e}")
+        return question
+
 
 # ===== Layer 0.5: 话题分类（基于embedding语义匹配） =====
 
@@ -334,6 +390,155 @@ def domain_semantic_search(query: str, topic: Optional[str], limit: int = 5, thr
     return [r for r in results if r["similarity"] >= threshold][:limit]
 
 
+# ═══════════════════════════════════════
+#  纯召回通道（单通道，无回退，供并行多路召回使用）
+# ═══════════════════════════════════════
+
+def _retrieve_fulltext(query: str, topic: Optional[str], limit: int = 10) -> List[Dict]:
+    """纯全文检索通道（MySQL FULLTEXT，无回退）"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            filter_sql, params = _domain_filter_sql(topic)
+            sql = f"""
+                SELECT id, category, question, answer, difficulty, related_skills,
+                       MATCH(question) AGAINST(%s IN NATURAL LANGUAGE MODE) as ft_score
+                FROM interview_qa_pairs
+                WHERE MATCH(question) AGAINST(%s IN NATURAL LANGUAGE MODE)
+                {filter_sql}
+                ORDER BY ft_score DESC
+                LIMIT %s
+            """
+            cur.execute(sql, [query, query] + params + [limit])
+            rows = cur.fetchall()
+            if rows:
+                return [dict(r) for r in rows if r.get("ft_score", 0) > 0.3]
+    except Exception as e:
+        print(f"[...] ⚠️ 全文检索通道失败: {e}")
+    finally:
+        conn.close()
+    return []
+
+
+def _retrieve_keyword(query: str, topic: Optional[str], limit: int = 10) -> List[Dict]:
+    """纯关键词LIKE检索通道（多关键词OR匹配 + 命中数排序）"""
+    keywords = _extract_keywords(query)
+    if not keywords:
+        return []
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            conditions, params = [], []
+            for w in keywords[:8]:
+                conditions.append("(question LIKE %s OR answer LIKE %s)")
+                params.extend([f"%{w}%", f"%{w}%"])
+            filter_sql, filter_params = _domain_filter_sql(topic)
+            sql = f"""
+                SELECT id, category, question, answer, difficulty, related_skills
+                FROM interview_qa_pairs
+                WHERE ({" OR ".join(conditions)})
+                {filter_sql}
+                LIMIT {limit * 2}
+            """
+            cur.execute(sql, params + filter_params)
+            rows = cur.fetchall()
+            if rows:
+                results = []
+                for row in rows:
+                    r = dict(row)
+                    r["kw_score"] = sum(
+                        1 for w in keywords if w.lower() in r["question"].lower()
+                    )
+                    results.append(r)
+                results.sort(key=lambda x: x["kw_score"], reverse=True)
+                return results[:limit]
+    except Exception as e:
+        print(f"[...] ⚠️ 关键词检索通道失败: {e}")
+    finally:
+        conn.close()
+    return []
+
+
+def _retrieve_semantic(
+    query: str, topic: Optional[str], limit: int = 10, threshold: float = 0.5
+) -> List[Dict]:
+    """纯语义检索通道（embedding cosine similarity，无回退）"""
+    qas = _load_qa_in_domain(topic)
+    if not qas:
+        return []
+
+    try:
+        query_vec = get_embedding(query)
+    except Exception as e:
+        print(f"[...] ⚠️ embedding获取失败: {e}")
+        return []
+
+    results = []
+    for qa in qas:
+        try:
+            stored_vec = json.loads(qa["embedding"])
+            sim = cosine_similarity(query_vec, stored_vec)
+            if sim >= threshold:
+                results.append({**qa, "sem_score": round(sim, 4)})
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: x["sem_score"], reverse=True)
+    return results[:limit]
+
+
+# ═══════════════════════════════════════
+#  RRF 多路融合排序
+# ═══════════════════════════════════════
+
+def rerank_fusion(
+    results_by_channel: Dict[str, List[Dict]],
+    original_query: str,
+    rrf_k: int = 60,
+) -> List[Dict]:
+    """多路召回融合排序（RRF + 多通道加分 + 关键词重叠加权）
+
+    results_by_channel: {"fulltext": [...], "keyword": [...], "semantic": [...]}
+    返回按融合分降序的结果列表，每个结果带 fusion_score 和 recall_channels。
+    """
+    seen: Dict[int, Dict] = {}  # id -> {item, score, channels}
+
+    for channel, results in results_by_channel.items():
+        for rank, item in enumerate(results):
+            qid = item["id"]
+            if qid not in seen:
+                seen[qid] = {"item": item, "score": 0.0, "channels": []}
+            # RRF: 1 / (k + rank + 1)
+            seen[qid]["score"] += 1.0 / (rrf_k + rank + 1)
+            seen[qid]["channels"].append(channel)
+
+    # 多通道加分：被多个通道同时召回的结果获得加权
+    for entry in seen.values():
+        n = len(entry["channels"])
+        if n > 1:
+            entry["score"] *= 1.0 + 0.2 * (n - 1)
+
+    # 关键词重叠加分（用原始问题与召回结果题面的关键词重叠率微调）
+    q_keywords = [w.lower() for w in _extract_keywords(original_query)]
+    if q_keywords:
+        for entry in seen.values():
+            q_lower = entry["item"]["question"].lower()
+            overlap = sum(1 for kw in q_keywords if kw in q_lower)
+            entry["score"] *= 1.0 + 0.15 * overlap / len(q_keywords)
+
+    sorted_entries = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+
+    return [
+        {
+            **entry["item"],
+            "fusion_score": round(entry["score"], 6),
+            "recall_channels": entry["channels"],
+        }
+        for entry in sorted_entries
+    ]
+
+
 def domain_exact_match(query: str, topic: Optional[str]) -> Optional[Dict]:
     """域内精确匹配"""
     conn = get_conn()
@@ -448,23 +653,28 @@ def ask_deepseek(question: str) -> str:
     model = get_setting("ai_model") or "deepseek-chat"
 
     t0 = time.time()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API 兜底回答... (model={model}, question=\"{question[:60]}...\")")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API 兜底回答... (model={model})")
 
-    prompt = f"""你是一个技术专家。用户问了一个技术问题，请用简短（50-100字）、准确的方式回答。
+    prompt = f"""你是一个技术专家。用户问了一个技术问题，请用准确、清晰的方式回答。
 
 用户问题：{question}
 
 要求：
-- 答案控制在50-100字
+- 答案控制在500字以内
 - 直接回答问题，不要铺垫
 - 技术术语要准确
-- 如果是概念性问题，给出定义+一句话解释"""
+- 如果是概念性问题，给出定义+解释+典型场景"""
+
+    print("─" * 60)
+    print(f"[LLM INPUT] (fallback, model={model}):")
+    print(prompt)
+    print("─" * 60)
 
     payload = json.dumps(
         {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 200,
+            "max_tokens": 1000,
             "temperature": 0.2,
         }
     ).encode()
@@ -474,9 +684,11 @@ def ask_deepseek(question: str) -> str:
     resp = urllib.request.urlopen(req, timeout=15)
     data = json.loads(resp.read().decode())
     elapsed = time.time() - t0
-    result_len = len(data["choices"][0]["message"]["content"])
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ AI API 兜底回答完成 (耗时: {elapsed*1000:.0f}ms, 输出长度: {result_len}字)")
-    return data["choices"][0]["message"]["content"]
+    result = data["choices"][0]["message"]["content"]
+    print(f"[LLM OUTPUT] ({len(result)} chars, {elapsed*1000:.0f}ms):")
+    print(result)
+    print("─" * 60)
+    return result
 
 
 def _keyword_overlap(question: str, matched: str) -> float:
@@ -491,37 +703,42 @@ def _keyword_overlap(question: str, matched: str) -> float:
     return overlap / len(q_words) if q_words else 1.0
 
 
-# ===== 主入口 =====
+# ===== 主入口 (V3 — 多路并行召回 + RRF融合排序) =====
 
 
 def fast_answer(question: str) -> Dict[str, Any]:
     """
-    完整检索流程：
-    L0: 缓存命中
-    L0.5: 话题分类
-    L1: 域内精确匹配 + LIKE
-    L2: 域内语义检索（embedding匹配）
-    L3: 预置短回答
-    L4: DeepSeek兜底
+    RAG检索流程 (V3):
+    L0:   缓存命中
+    L0.5: 查询改写（口语化→检索关键词，LLM驱动）
+    L0.6: 话题分类（关键词+embedding混合路由到9领域）
+    L1:   域内精确匹配（快速直查）
+    L1+L2: 多路并行召回（全文检索 ‖ 关键词 ‖ 语义）→ RRF融合排序
+           └─ 低置信度检查 → L4 DeepSeek兜底
+    L3:   预置短回答
+    L4:   DeepSeek兜底
     """
     start = time.time()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 快速问答开始... (question=\"{question[:60]}...\")")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔍 RAG检索开始 (V3)... (question=\"{question[:60]}...\")")
 
     # L0: 缓存
     cached = query_cache.get(question)
     if cached:
         elapsed = time.time() - start
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ 缓存命中 (耗时: {elapsed*1000:.0f}ms, layer=0)")
-        resp = {**cached, "layer": 0, "elapsed_ms": round(elapsed * 1000)}
-        return resp
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ⚡ 缓存命中 (layer=0, {elapsed*1000:.0f}ms)")
+        return {**cached, "layer": 0, "elapsed_ms": round(elapsed * 1000)}
 
-    # L0.5: 话题分类
+    # L0.5: 查询改写
+    t_rewrite = time.time()
+    rewritten = rewrite_query(question)
+    rewrite_ms = (time.time() - t_rewrite) * 1000 if rewritten != question else 0
+
+    # L0.6: 话题分类
     t_topic = time.time()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在进行话题分类...")
     topic = classify_topic(question)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 话题分类完成 (耗时: {(time.time()-t_topic)*1000:.0f}ms, topic={topic})")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 话题分类: {topic} ({(time.time()-t_topic)*1000:.0f}ms)")
 
-    # L1: 域内精确匹配 + LIKE
+    # L1: 域内精确匹配（快速路径，不参与并行）
     result = domain_exact_match(question, topic)
     if result:
         elapsed = time.time() - start
@@ -535,60 +752,105 @@ def fast_answer(question: str) -> Dict[str, Any]:
             "layer": 1,
             "elapsed_ms": round(elapsed * 1000),
             "related": related,
+            "recall_detail": {
+                "method": "exact_match",
+                "rewrite_ms": round(rewrite_ms) if rewrite_ms else 0,
+            },
         }
         query_cache.set(question, resp)
         return resp
 
-    # L2: 域内语义检索（主方案，embedding匹配）
-    t_sem = time.time()
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在进行域内语义检索... (threshold={SEMANTIC_MATCH_THRESHOLD})")
-    sem = domain_semantic_search(question, topic, threshold=SEMANTIC_MATCH_THRESHOLD)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 语义检索完成 (耗时: {(time.time()-t_sem)*1000:.0f}ms, 匹配数={len(sem)})")
-    if sem:
-        best = sem[0]
-        elapsed = time.time() - start
+    # L1+L2: 多路并行召回 + RRF融合排序
+    t_recall = time.time()
+    search_query = rewritten if rewritten != question else question
 
-        # 置信度检查：关键词重叠太低说明embedding只靠语义框架匹配而非真正理解
+    recall_results: Dict[str, List[Dict]] = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_retrieve_fulltext, search_query, topic, 10): "fulltext",
+            executor.submit(_retrieve_keyword, search_query, topic, 10): "keyword",
+            executor.submit(_retrieve_semantic, question, topic, 10): "semantic",
+        }
+        for future in as_completed(futures):
+            channel = futures[future]
+            try:
+                recall_results[channel] = future.result()
+            except Exception as e:
+                print(f"[...] ⚠️ {channel}通道异常: {e}")
+                recall_results[channel] = []
+
+    recall_ms = (time.time() - t_recall) * 1000
+    total_recalled = sum(len(v) for v in recall_results.values())
+    print(
+        f"[{datetime.now().strftime('%H:%M:%S')}] ✅ 多路召回完成 ({recall_ms:.0f}ms, "
+        f"ft={len(recall_results.get('fulltext', []))}, "
+        f"kw={len(recall_results.get('keyword', []))}, "
+        f"sem={len(recall_results.get('semantic', []))}, "
+        f"total={total_recalled})"
+    )
+
+    # RRF融合排序
+    t_rerank = time.time()
+    fused = rerank_fusion(recall_results, question)
+    rerank_ms = (time.time() - t_rerank) * 1000
+
+    if fused:
+        best = fused[0]
         overlap_ratio = _keyword_overlap(question, best["question"])
 
-        # 低置信度（关键词完全没重叠）→ 放弃检索结果，走DeepSeek
+        # 低置信度检查：关键词重叠<0.18 且语义分不足以覆盖 → DeepSeek兜底
         if overlap_ratio < 0.18:
-            confidence = "low"
-            # 不走缓存，直接降级到DeepSeek
-            try:
-                answer = ask_deepseek(question)
-                ds_elapsed = time.time() - start
-                resp = {
-                    "answer": answer,
-                    "category": "AI生成",
-                    "question": question,
-                    "matched": question,
-                    "confidence": "low",
-                    "topic": topic,
-                    "layer": 4,
-                    "elapsed_ms": round(ds_elapsed * 1000),
-                    "related": [],
-                    "note": "知识库中未找到精确匹配，以下为AI生成回答，仅供参考",
-                }
-                query_cache.set(question, resp)
-                return resp
-            except:
-                # DeepSeek失败，退回检索结果
-                pass
+            sem_score = best.get("sem_score")
+            if sem_score is None or sem_score < 0.65:
+                try:
+                    answer = ask_deepseek(question)
+                    elapsed = time.time() - start
+                    resp = {
+                        "answer": answer,
+                        "category": "AI生成",
+                        "question": question,
+                        "matched": question,
+                        "confidence": "low",
+                        "topic": topic,
+                        "layer": 4,
+                        "elapsed_ms": round(elapsed * 1000),
+                        "related": [],
+                        "recall_detail": _build_recall_detail(
+                            rewritten if rewritten != question else None,
+                            recall_results, len(fused),
+                            best.get("fusion_score", 0),
+                            recall_ms, rerank_ms, rewrite_ms,
+                        ),
+                        "note": "多路召回+融合排序后置信度不足，已切换AI生成回答",
+                    }
+                    query_cache.set(question, resp)
+                    return resp
+                except Exception:
+                    pass  # DeepSeek不可用时回退使用融合结果
 
-        confidence = "medium"
-        related = get_related_questions(best["question"], topic or best["category"], best["id"])
+        # 正常返回融合最佳结果
+        elapsed = time.time() - start
+        confidence = "high" if overlap_ratio >= 0.5 else "medium"
+        related = get_related_questions(best["question"], topic or best.get("category"), best["id"])
+
         resp = {
             "answer": best["answer"],
-            "category": best["category"],
-            "question": best["question"],
-            "matched": best["question"],
-            "similarity": best.get("similarity", 0),
+            "category": best.get("category", ""),
+            "question": best.get("question", ""),
+            "matched": best.get("question", ""),
+            "similarity": best.get("sem_score", best.get("fusion_score", 0)),
             "confidence": confidence,
             "topic": topic,
             "layer": 2,
             "elapsed_ms": round(elapsed * 1000),
             "related": related,
+            "recall_detail": _build_recall_detail(
+                rewritten if rewritten != question else None,
+                recall_results, len(fused),
+                best.get("fusion_score", 0),
+                recall_ms, rerank_ms, rewrite_ms,
+                best.get("recall_channels", []),
+            ),
         }
         query_cache.set(question, resp)
         return resp
@@ -638,3 +900,31 @@ def fast_answer(question: str) -> Dict[str, Any]:
             "elapsed_ms": round(elapsed * 1000),
             "related": [],
         }
+
+
+def _build_recall_detail(
+    rewritten_query: Optional[str],
+    recall_results: Dict[str, List[Dict]],
+    fusion_candidates: int,
+    top_fusion_score: float,
+    recall_ms: float,
+    rerank_ms: float,
+    rewrite_ms: float,
+    recall_channels: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """构建 recall_detail 子对象（避免 fast_answer 内联字典过长）"""
+    detail: Dict[str, Any] = {
+        "recall_channels": {
+            channel: len(items) for channel, items in recall_results.items()
+        },
+        "fusion_candidates": fusion_candidates,
+        "top_fusion_score": top_fusion_score,
+        "recall_ms": round(recall_ms),
+        "rerank_ms": round(rerank_ms),
+    }
+    if rewritten_query:
+        detail["rewritten_query"] = rewritten_query
+        detail["rewrite_ms"] = round(rewrite_ms)
+    if recall_channels:
+        detail["winning_channels"] = recall_channels
+    return detail
