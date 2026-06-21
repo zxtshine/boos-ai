@@ -469,8 +469,6 @@ class BossAutomation(BossScraper):
                 "backoff": self._cooldown_remaining(),
             }
 
-        # 正常页面：风控信号清零
-        self._risk_strikes = 0
         return {"ok": True, "reason": "", "category": "ok", "backoff": 0}
 
     def check_page_safety(self) -> bool:
@@ -482,26 +480,54 @@ class BossAutomation(BossScraper):
 
     # ── 风控冷却退避 ──
     def _trigger_cooldown(self, category: str = "rate_limit") -> None:
-        """已禁用风控冷却期——用户要求不阻塞操作。仅记日志。"""
-        print(f"  [检测到风控信号] category={category}（不阻塞，继续执行）")
+        """指数退避：连续命中风控时冷却时间递增，避免账号被限制。
+
+        如果当前不在冷却期，说明是新一轮风控触发，重置计数器从基础档开始；
+        如果在冷却期内再次命中，说明风控在升级，递增计数器延长冷却。
+        """
+        if not self.in_cooldown():
+            self._risk_strikes = 0  # 新一轮触发，重置计数
+        self._risk_strikes += 1
+        base = {
+            "rate_limit": 120,   # 2 分钟起
+            "captcha": 600,      # 10 分钟起
+            "banned": 3600,      # 1 小时起
+        }.get(category, 120)
+        seconds = min(base * (2 ** (self._risk_strikes - 1)), 7200)
+        self._cooldown_until = time.time() + seconds
+        print(f"  ⚠️ 触发风控冷却 category={category} strikes={self._risk_strikes} 冷却 {seconds:.0f}s")
 
     def _cooldown_remaining(self) -> float:
-        return 0.0
+        return max(0.0, self._cooldown_until - time.time())
 
     def in_cooldown(self) -> bool:
-        return False
+        return self._cooldown_remaining() > 0
 
     def _respect_cooldown(self) -> bool:
-        return True
+        if not self.in_cooldown():
+            return True
+        remaining = self._cooldown_remaining()
+        print(f"  🧊 风控冷却中，剩余 {remaining:.0f}s，跳过本次操作")
+        return False
 
-    def _human_pace(self, min_gap: float = 3.0, max_gap: float = 8.0) -> None:
+    def _human_pace(self, min_gap: float = 8.0, max_gap: float = 20.0) -> None:
         """两次高风险动作之间保证最小人性化间隔，避免节奏过于机械。"""
         now = time.time()
         elapsed = now - self._last_action_ts
         target = random.uniform(min_gap, max_gap)
-        if 0 < elapsed < target:
+        if elapsed < target:
             time.sleep(target - elapsed)
         self._last_action_ts = time.time()
+
+    def _human_scroll(self) -> None:
+        """模拟人类浏览：随机滚动页面，停留阅读。"""
+        try:
+            for _ in range(random.randint(1, 3)):
+                delta = random.randint(200, 600)
+                self.page.mouse.wheel(0, delta)
+                time.sleep(random.uniform(0.8, 2.5))
+        except Exception:
+            pass
 
     # ══════════════════════════════════════
     #  Session 保活 & 心跳
@@ -584,8 +610,20 @@ class BossAutomation(BossScraper):
         print(f"  🚀 投递: {job_url[:60]}...")
 
         try:
+            # 人类化节奏：两次投递间保持随机间隔
+            self._human_pace(min_gap=10.0, max_gap=25.0)
+
             self.page.goto(job_url, wait_until="load", timeout=45000)
             pause(2, 4)
+
+            # 模拟人类浏览：滚动阅读JD，让BOSS觉得是真人在看
+            self._human_scroll()
+            # 滚回顶部，避免 Playwright auto-scroll 触发 BOSS header 重排动画导致 click 超时
+            try:
+                self.page.evaluate("window.scrollTo({top: 0, behavior: 'instant'})")
+            except Exception:
+                pass
+            pause(1, 2)
 
             safety = self.inspect_page_safety()
             if not safety["ok"]:
@@ -611,43 +649,14 @@ class BossAutomation(BossScraper):
                 existing = get_application_by_url(job_url)
                 if existing and existing["status"] == "pending":
                     update_application_status(existing["id"], "applied")
+                print(f"  ✅ 已投递过，跳过")
                 return {"success": True, "message": "已投递过", "already_applied": True}
 
-            # 查找"立即沟通"按钮
-            apply_btn = self._find_element(SELECTORS["apply_button"])
-            if not apply_btn:
-                try:
-                    apply_btn = self.page.locator("text=立即沟通").first
-                    if not apply_btn.is_visible():
-                        apply_btn = None
-                except Exception:
-                    apply_btn = None
-
-            if not apply_btn:
-                return {"success": False, "message": "未找到投递按钮"}
-
-            self._safe_click(apply_btn)
-            pause(2, 3)
-
-            # 检查限制消息
-            if self._has_text("已达上限", "沟通人数已用完", "今日次数已用完", "今日沟通次数已用完"):
-                self._trigger_cooldown(category="rate_limit")
-                return {"success": False, "message": "BOSS直聘今日沟通次数已用完", "cooldown": True}
-
-            # 等待聊天窗口加载（BOSS 可能弹窗或跳转）
-            chat_input = self._find_element(SELECTORS["chat_input"], timeout_ms=8000)
-
-            # 如果详情页没找到聊天框，导航到聊天页找HR发消息
-            if not chat_input:
-                print(f"  ⏳ 详情页未找到聊天框，导航到聊天页...")
-                pause(1, 2)
-
-            # 发送招呼语：先在当前页试，不行就去聊天页找HR对话发
+            # ── 准备招呼语 ──
             greeting_text = greeting or get_setting(
                 "greeting_template",
                 "您好，我对贵公司的{job_title}岗位很感兴趣，请问可以详细了解一下吗？",
             )
-            # 如果有页面提取的岗位名，替换模板占位符
             if page_title and "{job_title}" in greeting_text:
                 greeting_text = greeting_text.replace("{job_title}", page_title)
             if page_title and "{company}" in greeting_text:
@@ -655,35 +664,59 @@ class BossAutomation(BossScraper):
                 company_name = (company_name or {}).get("company", "") if company_name else ""
                 greeting_text = greeting_text.replace("{company}", company_name or "贵公司")
 
-            # 如果 greeting 是空的或只有模板，且开启了 smart 模式，尝试用页面JD重新生成
             greeting_mode = get_setting("greeting_mode", "template")
             if greeting_mode == "smart" and (not greeting or greeting_text == greeting):
-                # greeting 未传入或就是原模板，说明 DB 里没有 JD → 用页面提取的重新生成
                 try:
                     from boss_replier import generate_greeting_ai
-
                     style = get_setting("ai_reply_style", "professional")
                     resume = get_setting("resume_summary", "")
                     is_boss = bool((get_application_by_url(job_url) or {}).get("is_boss"))
                     title = page_title or "相关岗位"
                     company = (get_application_by_url(job_url) or {}).get("company", "贵公司")
                     greeting_text = generate_greeting_ai(title, company, "", page_desc or "", is_boss, style, resume)
-                    print(f"  📝 用页面JD重新生成招呼语: {greeting_text[:60]!r}...")
+                    print(f"  📝 smart模式重新生成招呼语: {greeting_text[:60]!r}...")
                 except Exception as e:
                     print(f"  ⚠️ 重新生成招呼语失败: {e}")
-            greeting_sent = False
-            if greeting_text:
-                # 1) 当前页直接发（弹窗聊天框）
-                if chat_input:
-                    greeting_sent = self.send_message(greeting_text)
-                # 2) 去聊天页找最近对话发
-                if not greeting_sent:
-                    print(f"  ⏳ 当前页发消息失败，尝试聊天页...")
-                    greeting_sent = self._send_greeting_via_chat_page(greeting_text, job_url)
+
+            if not greeting_text or len(greeting_text.strip()) < 2:
+                print(f"  ⚠️ 招呼语为空，跳过投递")
+                return {"success": False, "message": "招呼语为空"}
+
+            print(f"  📝 招呼语({len(greeting_text)}字): {greeting_text[:80]}...")
+
+            # ── 调用注入JS原生点击+打字（绕过CDP检测）──
+            print(f"  🖱️ 调用 window.__bossApply() 原生投递...")
+            js_result = None
+            try:
+                js_result = self.page.evaluate(
+                    "async (greeting) => { return await window.__bossApply(greeting); }",
+                    greeting_text,
+                )
+                print(f"  📡 JS返回: success={js_result.get('success')} message={js_result.get('message', '')[:60]}")
+                if js_result.get("already_applied"):
+                    existing = get_application_by_url(job_url)
+                    if existing and existing["status"] == "pending":
+                        update_application_status(existing["id"], "applied")
+                    print(f"  ✅ 已投递过")
+                    return {"success": True, "message": "已投递过", "already_applied": True}
+                if js_result.get("cooldown"):
+                    self._trigger_cooldown(category="rate_limit")
+                    print(f"  ⚠️ 触发风控冷却")
+                    return {"success": False, "message": js_result.get("message", "触发风控"), "cooldown": True}
+            except Exception as e:
+                print(f"  ❌ window.__bossApply() 异常: {e}")
+                js_result = {"success": False, "message": str(e)}
+
+            greeting_sent = js_result.get("success", False) if js_result else False
+
+            # ── 兜底: JS失败且标记了 fallback_chat_page，走聊天页发 ──
+            if not greeting_sent and js_result and js_result.get("fallback_chat_page"):
+                print(f"  🔄 JS兜底: 导航到聊天页发招呼语...")
+                greeting_sent = self._send_greeting_via_chat_page(greeting_text, job_url)
                 if greeting_sent:
-                    print(f"  ✅ 招呼语已发送")
+                    print(f"  ✅ 聊天页发送成功")
                 else:
-                    print(f"  ⚠️ 招呼语发送失败")
+                    print(f"  ⚠️ 聊天页发送也失败")
 
             # 记录到 SQLite
             existing = get_application_by_url(job_url)
@@ -741,6 +774,7 @@ class BossAutomation(BossScraper):
 
             increment_daily_stat("applications_sent")
             self._save_state()
+            self._risk_strikes = 0  # 投递成功说明账号正常，清零风控计数
             print(f"  ✅ 投递成功")
             return {"success": True, "message": "投递成功", "application_id": app_id}
 
@@ -1998,55 +2032,63 @@ class BossAutomation(BossScraper):
         2. 扫描未读会话
         3. 对每个未读会话: 打开→读消息→存库→AI回复
         """
-        print("开始导航到聊天页面")
+        import datetime
+        _t_start = time.time()
+        print(f"\n{'='*60}")
+        print(f"[监控] ====== 开始新一轮监控周期 {datetime.datetime.now().strftime('%H:%M:%S')} ======")
         result = {"checked": 0, "new_messages": 0, "replies_sent": 0}
 
         # 只在不在聊天页时才导航（避免每轮刷新页面，触发 BOSS 登录检查）
         current_url = self.page.url
         need_nav = "/web/geek/chat" not in current_url
+        print(f"[监控] 当前URL: {current_url[:80]}  need_nav={need_nav}")
         if need_nav:
+            print(f"[监控] 导航到聊天页...")
             if not self.navigate_to_chat():
-                print("  [监控] 导航到聊天页失败")
+                print(f"[监控] ❌ 导航到聊天页失败")
                 return result
+            print(f"[监控] ✅ 导航完成")
 
         # 先在「全部」Tab 下抓一次完整列表，回填 company/job_title/last_msg（修 P10 漏字段）
+        print(f"[监控] 同步会话列表...")
         try:
             self.sync_conversation_list_full()
+            print(f"[监控] ✅ 会话列表同步完成")
         except Exception as e:
-            print(f"  [监控] sync_conversation_list_full 异常: {e}")
+            print(f"[监控] ⚠️ sync_conversation_list_full 异常: {e}")
 
         # 切到「未读」Tab 处理待回复会话
         if not need_nav:
             self._click_chat_tab("未读")
 
         if not self.check_page_safety():
-            print("  [监控] 安全检查未通过（登录过期/验证码等）")
+            print(f"[监控] ❌ 安全检查未通过（登录过期/验证码等），终止本轮")
             return result
 
         conversations = self.poll_conversation_list()
         result["checked"] = len(conversations)
-        print(f"  [监控] 扫描到 {len(conversations)} 个会话")
-        # 始终打印 body 内容用于调试
+        print(f"[监控] 扫描到 {len(conversations)} 个会话")
         try:
             preview = (self.page.inner_text("body") or "")[:800].replace("\n", " | ")
-            print(f"  [监控] Body: {preview}")
+            print(f"[监控] Body预览: {preview}")
         except Exception:
             pass
 
         from boss_state import list_active_conversations
 
         known_convs = list_active_conversations()
-        print(f"  [监控] 数据库已知活跃会话: {len(known_convs)}")
+        print(f"[监控] DB已知活跃会话: {len(known_convs)}个")
 
-        # 已在导航时切到「未读」Tab，当前列表都是未读。每轮上限 3 个
         if not conversations:
-            print(f"  [监控] 无未读消息，跳过本轮")
+            print(f"[监控] 无未读消息，周期结束")
+            print(f"{'='*60}\n")
             return result
         if len(conversations) > 3:
-            print(f"  [监控] 未读会话: {len(conversations)} 个，本轮只处理前3个")
+            print(f"[监控] 未读会话 {len(conversations)} 个，本轮处理前3个")
             conversations = conversations[:3]
 
-        for conv_data in conversations:
+        for idx, conv_data in enumerate(conversations):
+            print(f"\n[监控] --- 处理会话 {idx+1}/{len(conversations)} ---")
             text = conv_data.get("text", "")
             has_unread = conv_data.get("has_unread", False)
             element = conv_data.get("element")
@@ -2262,13 +2304,18 @@ class BossAutomation(BossScraper):
             # 自动回复
             auto_reply_enabled = get_setting("auto_reply_enabled", "false") == "true"
             if unreplied_hr_msg and auto_reply_enabled:
+                print(f"[监控] 自动回复: 已启用, 开始生成回复...")
                 today_replies = get_today_auto_reply_count()
                 if today_replies >= MAX_AUTO_REPLY_PER_DAY:
+                    print(f"[监控] 自动回复: 已达日上限({MAX_AUTO_REPLY_PER_DAY}条), 跳过")
                     continue
 
                 # 风控冷却期：本轮不发消息
                 if not self._respect_cooldown():
+                    print(f"[监控] 自动回复: 风控冷却中, 跳过")
                     continue
+
+                self._human_pace(min_gap=5.0, max_gap=15.0)
 
                 try:
                     from boss_replier import generate_reply
@@ -2385,5 +2432,7 @@ class BossAutomation(BossScraper):
         except Exception:
             pass
 
-        print(f"  [监控] 本轮完成: 消息 {result['new_messages']}, 回复 {result['replies_sent']}")
+        _t_elapsed = time.time() - _t_start
+        print(f"[监控] ====== 本轮完成: 扫描{result['checked']}个会话, 新消息{result['new_messages']}条, 回复{result['replies_sent']}条, 耗时{_t_elapsed:.1f}s ======")
+        print(f"{'='*60}\n")
         return result

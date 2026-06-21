@@ -2902,13 +2902,6 @@ async def chat_monitor_loop():
             if not automation:
                 continue
 
-            # 风控冷却期：跳过本轮高风险操作（聊天监控会发消息）
-            try:
-                if automation.in_cooldown():
-                    continue
-            except Exception:
-                pass
-
             # 每轮轻量检查登录态（不导航，不触发BOSS反爬）
             _heartbeat_count += 1
             alive = await _run_pw(automation.heartbeat)
@@ -2936,6 +2929,13 @@ async def chat_monitor_loop():
 
             if get_setting("auto_reply_enabled", "false") != "true":
                 continue
+
+            # 风控冷却期：跳过本轮高风险操作（发消息/浏览对话），但心跳和保活照常
+            try:
+                if automation.in_cooldown():
+                    continue
+            except Exception:
+                pass
 
             if browser_sync_lock is None:
                 browser_sync_lock = asyncio.Lock()

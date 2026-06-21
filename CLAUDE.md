@@ -19,7 +19,7 @@ BOSS 直聘（zhipin.com）自动化求职工具，核心能力：
 | 层级 | 选型 |
 |------|------|
 | 后端 | Python ≥ 3.10 + FastAPI + Uvicorn |
-| 浏览器自动化 | Playwright + Firefox 持久化 Profile |
+| 浏览器自动化 | Playwright + Firefox 持久化 Profile + 注入 JS 反检测（`add_init_script` + `window.__bossApply`） |
 | 数据库（主应用） | SQLite (WAL 模式)，文件 `.boss_profile/boss_state.db` |
 | 数据库（面试模块） | MySQL 8.0 (`ai_jobs_db`)，配置在 `interview/mysql_config.py` |
 | 前端 | 单文件 HTML + Vanilla JS + WebSocket（无构建步骤、无外部 CDN） |
@@ -33,12 +33,14 @@ BOSS 直聘（zhipin.com）自动化求职工具，核心能力：
 
 ```
 boss_app.py              # FastAPI 后端 —— REST API + WebSocket + 后台监控 + Agent + 面试端点
-boss_firefox.py           # BOSS 直聘搜索 + 详情 XHR + 福利筛选（Playwright 基类 BossScraper）
-boss_automation.py        # 自动化投递 + 聊天 + 发简历/微信（继承 BossScraper）
+boss_firefox.py           # BOSS 直聘搜索 + 详情 XHR + ANTI_DETECT JS 注入 + window.__bossApply 原生投递（Playwright 基类 BossScraper）
+boss_automation.py        # 自动化投递（hybrid: JS原生点击+Playwright兜底）+ 聊天 + 发简历/微信 + 风控冷却退避 + 人类行为模拟
 boss_replier.py            # AI 回复生成 + 打招呼语 + 简历优化上下文（调用 interview/llm_client）
 boss_state.py              # SQLite 数据持久化层（7 张表 + 线程本地连接）
 boss_company.py            # 公司画像聚合（岗位聚合 + HR 聚合 + 法人识别 + smart-send）
 boss_geo.py                # 城市/区/规模 BOSS 编码映射（惰性获取 + 6h 缓存 + 静态回退）
+boss_rag.py                # 历史 JD RAG 检索（余弦相似度 + embedding 缓存 + few-shot 上下文构建）
+scraper.py                 # 智联招聘独立爬虫（非主流程，旧版工具）
 
 agent/                     # ReAct AI Agent 子包
 ├── __init__.py            # 公开导出
@@ -66,6 +68,7 @@ interview/                 # 面试问答子模块（独立 FastAPI 服务，端
 ├── seed_data.py           # 种子数据（内置 QA 对）
 ├── batch_seed.py          # 批量导入种子数据（DeepSeek 生成 100+ QA 对）
 ├── benchmark.py           # 性能基准测试脚本
+├── benchmark_rag.py       # RAG 检索链路评测（召回率/MRR/时延 + 多策略对比 + 消融实验）
 ├── requirements.txt       # 面试模块 Python 依赖
 ├── start.sh               # 面试服务启动脚本
 └── static/
@@ -75,8 +78,16 @@ tests/
 ├── test_boss_state.py     # 数据层测试（公司去重、薪资过滤）
 └── test_smart_send.py     # 智能投递测试（HR 排序、法人检测、风控退避、问候回退）
 
+.github/workflows/
+└── ci.yml                 # GitHub Actions CI（Python 3.10 + pip install）
+
 config.yaml                # scraper.py 通用爬虫配置（非主流程）
 pyproject.toml             # 项目元数据 + CLI 入口 lakejob = lakejob_cli.cli:main
+requirements.txt           # 主应用 Python 依赖
+setup.sh                   # 一键环境安装脚本（pip + Playwright 浏览器）
+.pre-commit-config.yaml    # pre-commit 钩子（ruff lint/format + yaml/toml/json 检查 + 防密钥泄露）
+.gitignore
+.gitattributes
 ```
 
 ## 架构与数据流
@@ -88,7 +99,9 @@ pyproject.toml             # 项目元数据 + CLI 入口 lakejob = lakejob_cli.
 FastAPI (boss_app.py)  ←──HTTP───  lakejob CLI
   │  Python 函数调用
   ├── boss_automation.py  ──Playwright/Firefox──►  zhipin.com
+  │   │                    ──page.evaluate()────►  window.__bossApply (注入JS原生操作)
   ├── boss_replier.py     ──HTTP────────────────►  AI API (DeepSeek/OpenRouter/...)
+  ├── boss_rag.py         ──embedding────────────►  AI API + SQLite
   ├── boss_state.py       ──sqlite3─────────────►  .boss_profile/boss_state.db
   ├── boss_company.py     ──聚合查询─────────────►  内存 + DB
   ├── agent/tools.py      ──工具注册/分派────────►  BossAutomation + AI API
@@ -115,7 +128,7 @@ lakejob CLI (lakejob_cli/)
 
 | 表 | 用途 |
 |----|------|
-| `applications` | 投递记录（含 HR 活跃度、公司信息、法人、AI 优化结果缓存） |
+| `applications` | 投递记录（含 HR 活跃度、公司信息、法人、AI 优化结果缓存、JD embedding） |
 | `conversations` | HR 会话（含微信交换、兴趣度） |
 | `messages` | 聊天消息 |
 | `companies` | 公司信息缓存（24h 复用） |
@@ -186,8 +199,13 @@ lakejob CLI (lakejob_cli/)
 
 ## 关键设计决策
 
-### 风控绕开
-BOSS 直聘对 API 调用有风控。解决方案：使用 `page.evaluate(fetch)` 在浏览器内发起 XHR 请求，自动携带 cookie 和 referer，模拟真实浏览器行为。
+### 风控绕开（双层策略）
+
+**第一层 — 数据采集（XHR 代理）**：使用 `page.evaluate(fetch)` 在浏览器内发起 XHR 请求，自动携带 cookie 和 referer，模拟真实浏览器行为。用于搜索列表和岗位详情的数据抓取。
+
+**第二层 — 投递操作（注入 JS 原生操作）**：投递简历等高风险点击/输入操作绕过 Playwright CDP 协议，改用 `add_init_script` 注入 `window.__bossApply(greeting)` 函数（~207 行 JS），通过 `page.evaluate()` 调用。JS 内部使用原生 DOM API 完成：查找按钮 → `dispatchEvent(MouseEvent)` 点击 → 轮询等待聊天弹窗 → `textContent` + `InputEvent` 逐字输入招呼语 → 点击发送。避免了 Playwright `locator.click()` 被 BOSS 通过 CDP runtime 检测到的问题。
+
+两种策略互补：普通页面导航和 DOM 抓取仍用 Playwright（稳定可靠），仅在高风险的"点击立即沟通 + 输入招呼语"环节切换到注入 JS（安全隐蔽）。
 
 ### 公司去重
 投递前检查是否有中缀/后缀变体的重复公司名（如 "字节跳动" vs "字节跳动科技"），避免同一公司重复投递。基于 `_normalize_company_name` 进行模糊匹配。
@@ -195,17 +213,37 @@ BOSS 直聘对 API 调用有风控。解决方案：使用 `page.evaluate(fetch)
 ### HR 活跃度
 搜索时抓取 HR 最近活跃时间，超过阈值的自动跳过，避免浪费每日投递配额。法人（Boss 直聘身份）优先于普通 HR 排序。
 
-### 风控退避
-触发风控时使用指数退避（`_trigger_cooldown`），冷却时间随触发次数递增，防止账号受限。
+### 风控退避（指数退避）
+触发风控时使用指数退避（`_trigger_cooldown`），冷却时间随连续触发次数递增：
+- 按类别设定基础冷却：rate_limit=120s, captcha=600s, banned=3600s
+- 连续触发时翻倍：`seconds = min(base * 2^(strikes-1), 7200)`，最多 2 小时
+- 投递成功或冷却期结束自动清零 `_risk_strikes`
+- 冷却期间心跳和保活照常执行，仅跳过高风险操作（发消息、浏览对话）
 
 ### AI 缓存
 简历优化和沟通建议两个 AI 端点带 24h 持久化缓存（存 SQLite），相同 JD 不重复消耗 token。
+
+### 历史 JD RAG 检索（boss_rag.py）
+投递新岗位时，通过 embedding 余弦相似度检索历史相似 JD，复用之前的优化建议和 HR 反馈信号。相似度阈值 0.55，取 top-5 构建 few-shot 上下文，辅助 LLM 生成更精准的简历优化建议、招呼语和沟通策略。支持三种上下文模式：`optimize`（引用历史优化建议）、`greeting`（引用历史招呼语 + HR 反馈信号）、`chat`（引用历史沟通建议）。
 
 ### CLI JSON 信封
 所有 CLI 命令 stdout 输出统一 JSON（`{ok, command, data, pagination?, error}`），stderr 输出日志，exit 0=成功 1=失败。专为 AI Agent 子进程调用设计。
 
 ### ReAct Agent 循环
 Agent 使用 THOUGHT → ACTION → OBSERVATION → ... → FINAL 格式，最多 12 步自动循环。支持连续 3 次失败自动中断，结束后可 `MORE_STEPS` 继续执行。
+
+### 监控循环与 Agent 互斥
+监控循环（`chat_monitor_loop`）和 Agent 端点（`/api/agent/run`）共享 `asyncio.Lock`（`browser_sync_lock`），同一事件循环内互斥执行。Agent 持有锁期间监控循环阻塞，反之亦然。监控循环在风控冷却期间心跳和保活照常执行（防止 session 超时），仅跳过 `run_chat_monitor_cycle` 高风险操作。监控日志完整记录每轮耗时、扫描会话数、新消息数、回复数。
+
+### 人类行为模拟
+`BossAutomation` 提供两个辅助方法降低风控风险：
+- `_human_pace(min_gap, max_gap)` — 两次高风险操作间强制随机间隔（投递 10-25s，回复 5-15s）
+- `_human_scroll()` — 模拟人类浏览（随机滚动 1-3 次 + 阅读停留 0.8-2.5s），投递前滚动阅读 JD 后再操作，更符合真人行为模式。滚动后自动 `scrollTo(0,0)` 回顶部，避免 Playwright auto-scroll 触发 BOSS header 动画导致 click 超时。
+
+### 投递混合架构（Hybrid Playwright + Injected JS）
+`apply_to_job` 方法采用两阶段策略：
+1. **页面导航和阅读**：Playwright 导航到详情页 → `_human_scroll()` 模拟阅读 → `scrollTo(0,0)` 复位 → 安全检查和已投递检查
+2. **点击和输入**：调用 `page.evaluate("window.__bossApply(greeting)")` → 注入 JS 完成原生 DOM 点击和逐字输入 → 如果 JS 返回 `fallback_chat_page`，Playwright 导航到聊天页兜底发送
 
 ### 面试多层检索
 快速问答使用 4 层回退策略：L0 缓存 → L0.5 话题分类 → L1 精确匹配 → L2 语义检索（embedding）→ L3 预置回答 → L4 DeepSeek 兜底。

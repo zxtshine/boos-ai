@@ -224,6 +224,217 @@ try {
         get: () => ({effectiveType: '4g', rtt: 50, downlink: 10, saveData: false})
     });
 } catch(e) {}
+
+// ── bossApply: 原生点击"立即沟通" + 逐字输入招呼语 ──
+// Python 通过 page.evaluate("window.__bossApply(greeting)") 调用此函数
+// 返回 {success, message, ...}，跟 apply_to_job 的 Python 返回值结构一致
+window.__bossApply = async function(greeting) {
+    const _log = (msg) => console.log('[bossApply] ' + msg);
+    const _sleep = (ms) => new Promise(r => setTimeout(r, Math.round(ms)));
+
+    _log('========== 开始原生投递流程 ==========');
+    _log('招呼语: ' + (greeting || '').substring(0, 60) + '...');
+
+    // ── 0. 检查页面状态 ──
+    const body = (document.body || {}).innerText || '';
+    _log('页面body长度: ' + body.length);
+
+    if (body.includes('已沟通') || body.includes('继续沟通')) {
+        _log('✓ 检测到已投递过，跳过');
+        return {success: true, message: '已投递过', already_applied: true};
+    }
+    if (body.includes('已达上限') || body.includes('沟通人数已用完') || body.includes('今日次数已用完') || body.includes('今日沟通次数已用完')) {
+        _log('✗ 检测到今日沟通次数已用完');
+        return {success: false, message: 'BOSS直聘今日沟通次数已用完', cooldown: true};
+    }
+    if (body.includes('操作太频繁') || body.includes('稍后再试') || body.includes('访问过于频繁')) {
+        _log('✗ 检测到操作频率限制');
+        return {success: false, message: '操作频率限制', cooldown: true};
+    }
+
+    // ── 1. 查找"立即沟通"按钮 ──
+    _log('步骤1: 查找"立即沟通"按钮...');
+    let btn = null;
+    // 策略1: BOSS标准class名
+    const byClass = document.querySelector('.btn-startchat');
+    if (byClass && byClass.offsetParent !== null) {
+        btn = byClass;
+        _log('  通过.btn-startchat找到: ' + (btn.className || ''));
+    }
+    // 策略2: 遍历所有a/button，匹配文本
+    if (!btn) {
+        const candidates = document.querySelectorAll('a, button, span.btn, div[class*="btn"]');
+        _log('  遍历' + candidates.length + '个候选元素...');
+        for (const el of candidates) {
+            const text = (el.innerText || '').trim();
+            if ((text === '立即沟通' || text.includes('立即沟通')) && el.offsetParent !== null) {
+                btn = el;
+                _log('  通过文本匹配找到: <' + el.tagName + '> class=' + (el.className || ''));
+                break;
+            }
+        }
+    }
+    // 策略3: 查找包含"沟通"的链接
+    if (!btn) {
+        const allLinks = document.querySelectorAll('a');
+        for (const a of allLinks) {
+            if ((a.innerText || '').includes('沟通') && a.offsetParent !== null) {
+                btn = a;
+                _log('  通过"沟通"关键词找到: ' + (a.className || ''));
+                break;
+            }
+        }
+    }
+    if (!btn) {
+        _log('✗ 未找到"立即沟通"按钮');
+        return {success: false, message: '未找到投递按钮'};
+    }
+    _log('  按钮元素: <' + btn.tagName + '> ' + (btn.className || '') + ' visible=' + (btn.offsetParent !== null));
+
+    // ── 2. 原生点击按钮 ──
+    _log('步骤2: 原生点击按钮...');
+    btn.scrollIntoView({block: 'center', behavior: 'instant'});
+    await _sleep(200 + Math.random() * 300);
+    btn.focus();
+    await _sleep(100 + Math.random() * 200);
+    // 模拟真人点击序列: mousedown → mouseup → click
+    const rect = btn.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    ['mousedown', 'mouseup', 'click'].forEach(name => {
+        btn.dispatchEvent(new MouseEvent(name, {
+            bubbles: true, cancelable: true,
+            clientX: cx, clientY: cy, button: 0
+        }));
+    });
+    _log('  点击事件已触发 (clientX=' + Math.round(cx) + ' clientY=' + Math.round(cy) + ')');
+
+    // ── 3. 等待聊天弹窗 ──
+    _log('步骤3: 等待聊天弹窗...');
+    let chatInput = null;
+    for (let attempt = 0; attempt < 40; attempt++) {
+        await _sleep(250);
+        // BOSS聊天输入框是 contenteditable div
+        const inputs = document.querySelectorAll('[contenteditable="true"]');
+        for (const inp of inputs) {
+            if (inp.offsetParent !== null) {
+                chatInput = inp;
+                break;
+            }
+        }
+        if (chatInput) {
+            _log('  聊天弹窗已出现 (第' + (attempt + 1) + '次检测, ' + ((attempt + 1) * 250) + 'ms)');
+            break;
+        }
+        // 检查是否跳转到聊天页了
+        if (window.location.href.includes('/chat')) {
+            _log('  页面已跳转到聊天页');
+            break;
+        }
+        // 检查限制
+        const b = (document.body || {}).innerText || '';
+        if (b.includes('已达上限') || b.includes('今日次数已用完')) {
+            _log('✗ 等待期间检测到已达上限');
+            return {success: false, message: 'BOSS直聘今日沟通次数已用完', cooldown: true};
+        }
+    }
+    if (!chatInput) {
+        // 再次尝试，可能在聊天页
+        await _sleep(2000);
+        const inputs = document.querySelectorAll('[contenteditable="true"]');
+        for (const inp of inputs) {
+            if (inp.offsetParent !== null) { chatInput = inp; break; }
+        }
+    }
+    if (!chatInput) {
+        _log('✗ 聊天弹窗超时(10s)，未找到输入框');
+        // 不直接返回失败，由Python侧兜底（导航到聊天页发）
+        return {success: false, message: '聊天框未出现(10s超时)', fallback_chat_page: true};
+    }
+    _log('  输入框就绪');
+
+    // ── 4. 逐字输入招呼语 ──
+    _log('步骤4: 逐字输入招呼语(' + greeting.length + '个字符)...');
+    chatInput.focus();
+    await _sleep(100 + Math.random() * 200);
+    chatInput.click();
+    await _sleep(200 + Math.random() * 300);
+
+    const startTime = Date.now();
+    for (let i = 0; i < greeting.length; i++) {
+        const ch = greeting[i];
+        // contenteditable div: 直接用textContent追加，然后触发input事件
+        chatInput.textContent += ch;
+        chatInput.dispatchEvent(new InputEvent('input', {
+            bubbles: true, cancelable: true,
+            data: ch, inputType: 'insertText'
+        }));
+        // 随机延迟 60~180ms/字（中速打字）
+        const delay = 60 + Math.random() * 120;
+        await _sleep(delay);
+
+        // 每20字打一个小日志
+        if ((i + 1) % 20 === 0) {
+            const elapsed = Date.now() - startTime;
+            _log('  已输入' + (i + 1) + '/' + greeting.length + '字 (' + Math.round(elapsed / 1000) + 's)');
+        }
+    }
+    const typeTime = Date.now() - startTime;
+    _log('  输入完成, 耗时' + Math.round(typeTime / 1000) + 's, 均速' + Math.round(greeting.length / (typeTime / 1000)) + '字/秒');
+
+    // ── 5. 发送 ──
+    _log('步骤5: 查找发送按钮并发送...');
+    await _sleep(300 + Math.random() * 500);
+    const sendSelectors = [
+        'button[type="send"]',
+        '.btn-send',
+        'button:has-text("发送")',
+        '[class*="send"]',
+        'span:has-text("发送")',
+    ];
+    let sendBtn = null;
+    // has-text不是原生CSS，用文本遍历
+    const btns = document.querySelectorAll('button, span.btn, div[class*="btn"], a[class*="btn"]');
+    for (const b of btns) {
+        const t = (b.innerText || '').trim();
+        if ((t === '发送' || t === '发 送' || t.includes('发送')) && b.offsetParent !== null) {
+            sendBtn = b;
+            break;
+        }
+    }
+    if (!sendBtn) {
+        // BOSS新版可能用SVG图标按钮，尝试查找chat-input附近的按钮
+        const chatArea = chatInput.closest('[class*="chat"]') || chatInput.closest('[class*="dialog"]') || chatInput.parentElement;
+        if (chatArea) {
+            const nearbyBtns = chatArea.querySelectorAll('button');
+            for (const b of nearbyBtns) {
+                if (b.offsetParent !== null && (b.innerText || '').trim().length <= 3) {
+                    sendBtn = b;
+                    _log('  通过附近按钮找到发送: ' + (b.innerText || '(图标)'));
+                    break;
+                }
+            }
+        }
+    }
+    if (!sendBtn) {
+        _log('✗ 未找到发送按钮');
+        return {success: false, message: '招呼语已输入但未找到发送按钮'};
+    }
+    _log('  发送按钮: <' + sendBtn.tagName + '> ' + (sendBtn.className || ''));
+
+    await _sleep(200 + Math.random() * 300);
+    sendBtn.click();
+    _log('  发送按钮已点击');
+
+    // ── 6. 确认发送成功 ──
+    await _sleep(500);
+    const finalBody = (document.body || {}).innerText || '';
+    if (finalBody.includes('发送成功') || finalBody.includes('消息已发送')) {
+        _log('✓ BOSS确认发送成功');
+    }
+    _log('========== 原生投递流程完成 ==========');
+    return {success: true, message: '投递成功'};
+};
 """
 
 # ── 技能词库（仅分析用）──
