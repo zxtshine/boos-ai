@@ -1,6 +1,6 @@
 # CLAUDE.md — lakejobai-job-radar
 
-> AI 驱动的 BOSS 直聘智能求职助手 · Web 控制台 + CLI + ReAct Agent + 面试练习
+> AI 驱动的 BOSS 直聘智能求职助手 · Web 控制台 + CLI + Plan-then-Execute Agent + 面试练习
 
 ## 项目概述
 
@@ -8,7 +8,7 @@ BOSS 直聘（zhipin.com）自动化求职工具，核心能力：
 - **搜索**：60+ 城市、福利关键词、薪资/经验/学历/规模/融资阶段多维筛选，支持多区+多规模
 - **批量投递**：翻页扫描 + 公司去重 + HR 活跃度过滤 + 法人识别优先排序 + 一键批量投递
 - **AI 接管聊天**：自动回复 HR（人格化）+ 自动交换微信/简历/电话 + 转人工检测
-- **AI 智能体**：ReAct Agent 自主执行求职任务（搜索→分析→投递→沟通全流程）
+- **AI 智能体**：Plan-then-Execute Agent 自主执行求职任务（一次规划→批量执行→异常重规划→总结）
 - **AI 分析**：岗位匹配度分析、简历优化（24h 缓存）、沟通建议（24h 缓存）
 - **面试练习**：独立 FastAPI 服务，Ollama 出题 + DeepSeek 批改 + 语义检索问答 + 薄弱点分析
 - **Web 控制台**：单文件 SPA 深色 UI，微信风格聊天界面，投递漏斗可视化
@@ -42,12 +42,12 @@ boss_geo.py                # 城市/区/规模 BOSS 编码映射（惰性获取 
 boss_rag.py                # 历史 JD RAG 检索（余弦相似度 + embedding 缓存 + few-shot 上下文构建）
 scraper.py                 # 智联招聘独立爬虫（非主流程，旧版工具）
 
-agent/                     # ReAct AI Agent 子包
+agent/                     # Plan-then-Execute AI Agent 子包
 ├── __init__.py            # 公开导出
-├── prompts.py             # ReAct 系统提示模板（THOUGHT/ACTION/FINAL 格式）
+├── prompts.py             # 规划/重规划/总结 系统提示模板（JSON 计划格式）
 ├── tools.py               # 14 个原子工具 + 3 个复合技能 + ToolRegistry + ToolContext
 ├── skills.py              # 3 个复合技能（smart_scan / prepare_application / smart_apply）
-└── loop.py                # AgentLoop 主循环（最多 12 步，支持 MORE_STEPS 扩展）
+└── loop.py                # AgentLoop 主循环（规划→执行→重规划→总结，最多 10 步）
 
 lakejob_cli/               # CLI 子包
 ├── cli.py                 # 18 条 Click 命令定义
@@ -106,7 +106,7 @@ FastAPI (boss_app.py)  ←──HTTP───  lakejob CLI
   ├── boss_company.py     ──聚合查询─────────────►  内存 + DB
   ├── agent/tools.py      ──工具注册/分派────────►  BossAutomation + AI API
   ├── agent/skills.py     ──复合技能────────────►  编排多个工具一步完成
-  └── agent/loop.py       ──ReAct 循环──────────►  LLM + 工具执行
+  └── agent/loop.py       ──规划→执行→重规划────►  LLM + 工具执行
         ▲
         │  HTTP (httpx)
 lakejob CLI (lakejob_cli/)
@@ -131,7 +131,7 @@ lakejob CLI (lakejob_cli/)
 | `applications` | 投递记录（含 HR 活跃度、公司信息、法人、AI 优化结果缓存、JD embedding） |
 | `conversations` | HR 会话（含微信交换、兴趣度） |
 | `messages` | 聊天消息 |
-| `companies` | 公司信息缓存（24h 复用） |
+| `interview_sessions` | 面试会话持久化（暂停/恢复） |
 | `shortlists` | 候选池 |
 | `daily_stats` | 每日统计 |
 | `settings` | KV 配置（含 AI Key 等敏感信息） |
@@ -161,8 +161,8 @@ lakejob CLI (lakejob_cli/)
 | 公司 | `GET /api/companies/preview`, `POST /api/companies/smart-send` | 公司画像/智能投递 |
 | 聊天 | `GET /api/conversations`, `POST /api/conversations/{id}/send\|sync\|open` | 会话管理 |
 | 地理 | `GET /api/geo/cities\|districts\|areas` | 城市/区 BOSS 编码 |
-| 面试 | `POST /api/interview/start\|answer\|skip\|end` | 内嵌面试端点 |
-| Agent | `GET /api/agent/tools`, `POST /api/agent/run` | ReAct Agent |
+| 面试 | `POST /api/interview/start\|chat\|end` | 内嵌面试端点 |
+| Agent | `GET /api/agent/tools`, `POST /api/agent/run` | Plan-then-Execute Agent |
 | 设置 | `GET\|PUT /api/settings` | KV 配置读写 |
 | WebSocket | `WS /ws` | 实时截图 + 监控事件推送 |
 
@@ -170,10 +170,28 @@ lakejob CLI (lakejob_cli/)
 
 | 分类 | 端点 | 说明 |
 |------|------|------|
-| 面试 | `POST /api/interview/start\|next\|answer\|end` | 完整面试流程 |
-| 学习 | `POST /api/learn/ask` | 快速问答（4 层检索） |
-| 管理 | `POST /api/admin/refresh-embeddings` | 重建 QA 向量 |
-| 历史 | `GET /api/history/sessions\|session/{id}\|weak-areas` | 面试历史回顾 |
+| 面试 | `POST /api/interview/start\|chat\|end` | 对话式面试流程 |
+| 学习 | `POST /api/learn/ask`, `GET /api/learn/search` | 快速问答 + 联想搜索 |
+| 知识库 | `GET /api/qa/search`, `POST /api/qa/add`, `GET /api/qa/categories` | QA 管理 |
+| 岗位 | `GET /api/jobs/search` | 语义搜索岗位（MySQL embedding） |
+| 历史 | `GET /api/review/sessions\|session/{id}\|weak-areas` | 面试历史回顾 |
+| 管理 | `POST /api/admin/refresh-embeddings` | 重建 QA embedding |
+
+## WebSocket 事件类型（WS /ws）
+
+| 分类 | 事件类型 | 说明 |
+|------|----------|------|
+| 系统 | `system` (started/stopped/relogin_ok) | 浏览器生命周期 |
+| 监控 | `monitor_paused` / `monitor_resumed` | 自动回复控制 |
+| 搜索 | `search_complete` | 搜索完成 |
+| 投递 | `apply_complete` / `batch_complete` / `scan_complete` / `scan_apply_complete` | 投递进度 |
+| 聊天 | `new_messages` / `auto_reply_sent` / `manual_message_sent` / `wechat_exchanged` / `transfer_requested` | 实时消息 |
+| 状态 | `job_updated` / `auto_reply_toggled` / `settings_updated` | 状态变更 |
+| Agent | `agent_started` / **`agent_plan`** / `agent_step` / `agent_complete` / `agent_error` | Plan-then-Execute Agent 生命周期 |
+| 安全 | `safety_warning` / `session_expired` | 风控/会话告警 |
+| 连接 | `connected` / `pong` / `error` | 连接管理 |
+
+**`agent_plan`** 是 Plan-then-Execute 架构特有的新事件，在规划阶段完成后广播完整的 JSON 执行计划（含 analysis / plan / constraints），让前端预览全部步骤。
 
 ## Agent 工具清单（17 个：14 原子 + 3 复合技能）
 
@@ -229,8 +247,14 @@ lakejob CLI (lakejob_cli/)
 ### CLI JSON 信封
 所有 CLI 命令 stdout 输出统一 JSON（`{ok, command, data, pagination?, error}`），stderr 输出日志，exit 0=成功 1=失败。专为 AI Agent 子进程调用设计。
 
-### ReAct Agent 循环
-Agent 使用 THOUGHT → ACTION → OBSERVATION → ... → FINAL 格式，最多 12 步自动循环。支持连续 3 次失败自动中断，结束后可 `MORE_STEPS` 继续执行。
+### Plan-then-Execute Agent 循环
+Agent 使用四阶段流程：
+1. **规划**（1 次 LLM）— LLM 根据用户目标一次性生成 JSON 执行计划（工具名+参数+原因+约束）
+2. **执行**（0 次 LLM）— Python 执行器按计划顺序调用工具，支持 `$N` 跨步引用前步结果
+3. **重规划**（仅异常时，最多 2 次）— 步骤失败或空结果时回调 LLM 修正计划
+4. **总结**（0-1 次 LLM）— 简单任务直接拼接结果，复杂任务 1 次 LLM 生成中文摘要
+
+计划步数上限 10 步，优先使用复合技能（smart_scan/smart_apply）减少步数。执行器自动遵守用户约束（如"不投递"），遇 apply_job 等投递工具自动跳过。
 
 ### 监控循环与 Agent 互斥
 监控循环（`chat_monitor_loop`）和 Agent 端点（`/api/agent/run`）共享 `asyncio.Lock`（`browser_sync_lock`），同一事件循环内互斥执行。Agent 持有锁期间监控循环阻塞，反之亦然。监控循环在风控冷却期间心跳和保活照常执行（防止 session 超时），仅跳过 `run_chat_monitor_cycle` 高风险操作。监控日志完整记录每轮耗时、扫描会话数、新消息数、回复数。
@@ -245,8 +269,8 @@ Agent 使用 THOUGHT → ACTION → OBSERVATION → ... → FINAL 格式，最�
 1. **页面导航和阅读**：Playwright 导航到详情页 → `_human_scroll()` 模拟阅读 → `scrollTo(0,0)` 复位 → 安全检查和已投递检查
 2. **点击和输入**：调用 `page.evaluate("window.__bossApply(greeting)")` → 注入 JS 完成原生 DOM 点击和逐字输入 → 如果 JS 返回 `fallback_chat_page`，Playwright 导航到聊天页兜底发送
 
-### 面试多层检索
-快速问答使用 4 层回退策略：L0 缓存 → L0.5 话题分类 → L1 精确匹配 → L2 语义检索（embedding）→ L3 预置回答 → L4 DeepSeek 兜底。
+### 面试多层检索（7 层）
+快速问答使用 7 层回退策略：L0 缓存 → L0.5 查询改写（LLM）→ L0.6 话题分类（关键词+embedding）→ L1 域内精确匹配 → L1+L2 多路并行召回+RRF 融合排序 → L3 预置回答 → L4 DeepSeek 兜底。
 
 ## 常用命令
 
