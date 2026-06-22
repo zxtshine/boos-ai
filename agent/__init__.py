@@ -1,10 +1,10 @@
-"""Agent 模块 — ReAct Agent 核心框架。
+"""Agent 模块 — Plan-then-Execute Agent 核心框架。
 
 提供:
 - ToolRegistry: 工具注册表
 - ToolContext: 工具运行时上下文（依赖注入）
 - register_all: 一键注册所有工具
-- AgentLoop: ReAct 推理-行动循环
+- AgentLoop: Plan-then-Execute 主循环（规划→执行→重规划→总结）
 - 系统 Prompt 模板
 """
 

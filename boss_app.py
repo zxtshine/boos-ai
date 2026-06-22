@@ -2713,10 +2713,10 @@ def agent_list_tools():
 
 @app.post("/api/agent/run")
 async def agent_run(req: AgentRunRequest):
-    """启动 ReAct Agent 自主执行求职任务。
+    """启动 AI Agent 自主执行求职任务。
 
-    Agent 会根据 goal 自主决策：搜索 → 分析 → 筛选 → 投递 → 总结。
-    每步进度通过 WebSocket 实时推送（type: agent_step）。
+    Agent 根据 goal 制定执行计划 → 按序执行工具 → 异常时重规划 → 总结。
+    每步进度和计划通过 WebSocket 实时推送（type: agent_plan / agent_step）。
     """
     global monitor_paused, browser_sync_lock
 
@@ -2768,6 +2768,17 @@ async def agent_run(req: AgentRunRequest):
                 "tool": step_record.get("tool", ""),
                 "args": step_record.get("args", {}),
                 "result_preview": (step_record.get("result") or "")[:200],
+                "skipped": step_record.get("skipped", False),
+                "error": step_record.get("error", False),
+            })
+
+        # 计划回调：LLM 产出计划后立即推送
+        async def _on_plan(plan_data: dict):
+            await broadcast_ws({
+                "type": "agent_plan",
+                "analysis": plan_data.get("analysis", ""),
+                "plan": plan_data.get("plan", []),
+                "constraints": plan_data.get("constraints", []),
             })
 
         # 创建并运行 Agent
@@ -2777,6 +2788,7 @@ async def agent_run(req: AgentRunRequest):
             goal=req.goal.strip(),
             max_steps=req.max_steps,
             on_step=_on_step,
+            on_plan=_on_plan,
         )
 
         await broadcast_ws({
@@ -2785,12 +2797,28 @@ async def agent_run(req: AgentRunRequest):
             "max_steps": req.max_steps,
         })
 
+        if not req.auto_execute:
+            # dry-run: 只规划不执行
+            plan_data = await loop._plan()
+            return {
+                "completion_status": "planned",
+                "steps": 0,
+                "summary": plan_data.get("analysis", ""),
+                "detail": [],
+                "milestones": {},
+                "plan": plan_data.get("plan", []),
+                "analysis": plan_data.get("analysis", ""),
+                "constraints": plan_data.get("constraints", []),
+            }
+
         result = await loop.run()
 
         await broadcast_ws({
             "type": "agent_complete",
+            "status": result.get("completion_status", ""),
             "steps": result.get("steps", 0),
             "summary": result.get("summary", "")[:500],
+            "replans": result.get("replans", 0),
         })
 
         return result

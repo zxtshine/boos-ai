@@ -99,9 +99,11 @@ SYSTEM_PROMPT = """你是一个求职者开发的AI助手，在BOSS直聘上帮�
 - 如果对方感兴趣，求职者本人会亲自跟进
 
 ## 求职者背景（动态适配）
-- 根据对方发布的招聘岗位来匹配你的回复侧重点
+- 下面上下文中的「我的简历摘要」是求职者真实经历的唯一定义——只能从中引用技能和经验
+- 回复时用「我对X方向有经验/感兴趣」代替「我做过X」，除非简历明确写到了X
+- 如果简历信息不足，多引导对方介绍岗位细节，不要编造经历来填补空白
 - 不要硬套一个万能模板：如果对方招的是AI产品经理，就围绕AI产品方向聊；如果招的是大模型开发，就围绕模型/工程方向聊
-- 绝不要编造岗位不存在的信息，也不要提到与对方招聘岗位无关的技术领域
+- 绝不要编造求职者没有的实习经历
 
 ## 回复原则
 - 2-4句话，自然真诚，不许生硬
@@ -240,7 +242,7 @@ def generate_reply(
             {"role": "user", "content": context},
         ]
 
-        raw = llm_chat_deepseek(messages, temperature=0.7)
+        raw = llm_chat_deepseek(messages, temperature=0.6)
         raw = raw.strip().strip('"').strip("'").strip()
 
         reply = ""
@@ -313,14 +315,18 @@ def generate_greeting(
     return greeting
 
 
-GREETING_SYSTEM_PROMPT = """你是求职者本人，正在BOSS直聘上给招聘者发第一句打招呼语。
+GREETING_SYSTEM_PROMPT = """你是求职者的写作助理，帮他生成BOSS直聘上的第一句打招呼语。
 
-要求：
-- 1-2句话，口语自然，像真人主动打招呼，不要客套话堆砌
-- 紧扣对方岗位（岗位名/JD要点）说明你为什么感兴趣、你哪点匹配
-- 不要夸张吹捧，不要列技能清单，不要说"贵公司"这种过于书面的词，用"咱们/你们"更自然
+核心原则：你是在帮一个真实的人写招呼语，不是在扮演他。他的真实经历来自下面的简历摘要，JD是目标岗位的要求。你的任务是把两者之间的匹配点用自然的口语表达出来。
+
+硬性规则：
+- 只能声称简历摘要中明确写到的技能和经历，禁止编造任何简历中没有的实习/项目/技能
+- 所有说的实习经历必须要依据简历回答
+- 表达方式从"我会X"改为"我在X方面有经验"或"我对X方向感兴趣"——不确定的用兴趣表达，确定的用经验表达
+- 1-2句话，口语自然，不要客套话堆砌
+- 不要夸张吹捧，不要列技能清单，不要说"贵公司"，用"咱们/你们"更自然
 - 不出现微信/电话/QQ等联系方式（BOSS会拦截整条消息）
-- 末尾可以带一句轻量的："顺便说下，正在跟你聊的这个自动回复是我自己开发的AI，算我的技术名片"——仅当岗位与AI/开发/技术相关时才加，否则不要加。
+- 末尾可以带一句："顺便说下，正在跟你聊的这个自动回复是我自己开发的AI，算我的技术名片"——仅当岗位与AI/开发/技术相关时才加
 - 只输出招呼语正文，不要任何解释、不要引号、不要JSON"""
 
 
@@ -390,7 +396,7 @@ def generate_greeting_ai(
         ]
 
         print(f"[greeting] → 调用 LLM ...")
-        raw = llm_chat_deepseek(messages, temperature=0.8)
+        raw = llm_chat_deepseek(messages, temperature=0.3)
         print(f"[greeting] LLM 返回长度={len(raw)},raw:{raw}")
         text = (raw or "").strip().strip('"').strip("'").strip()
         # 去掉模型可能多输出的前缀
@@ -422,16 +428,19 @@ def generate_greeting_ai(
 def _build_generic_prompt(
     job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints=""
 ):
+    # 先放简历（真实经历），再放 JD（目标岗位），防止 LLM 把 JD 要求当成自己的经历
     parts = []
-    if job_desc and len(job_desc.strip()) >= 20:
-        try:
-            from boss_rag import similar_jds, build_rag_context
-            similar = similar_jds(job_desc, limit=3)
-            rag = build_rag_context(similar, "greeting")
-            if rag:
-                parts.append(rag)
-        except Exception:
-            pass
+
+    parts.append("=== 真实经历（只能从这里引用技能和经验） ===")
+    if resume_summary:
+        parts.append(resume_summary[:400])
+    else:
+        parts.append("（未提供简历摘要，请用兴趣/学习方向等方式表达，不要声称具体实习经验）")
+    if optimize_hints:
+        parts.append(f"简历优化方向（用于发现可强调的已有技能）:\n{optimize_hints[:300]}")
+
+    parts.append("")
+    parts.append("=== 岗位JD（目标岗位要求，用于找匹配点） ===")
     parts.extend([
         f"招聘公司: {company or '未知'}",
         f"岗位名称: {job_title or '未知'}",
@@ -439,18 +448,29 @@ def _build_generic_prompt(
         f"boss_hint: {'true' if is_boss else 'false'}",
     ])
     if job_desc:
-        parts.append(f"岗位JD（节选）: {job_desc[:400]}")
-    if resume_summary:
-        parts.append(f"我的简历摘要: {resume_summary[:300]}")
-    if optimize_hints:
-        parts.append(f"\n=== 简历优化建议（参考这些方向来写招呼语，不要直接提优化简历） ===\n{optimize_hints[:600]}")
+        parts.append(f"岗位职责与要求: {job_desc[:400]}")
+
+    if job_desc and len(job_desc.strip()) >= 20:
+        try:
+            from boss_rag import similar_jds, build_rag_context
+            similar = similar_jds(job_desc, limit=3)
+            rag = build_rag_context(similar, "greeting")
+            if rag:
+                parts.append(f"\n历史相似岗位招呼语参考:\n{rag[:500]}")
+        except Exception:
+            pass
+
     parts.append(f"\n本次风格: {style_hint}")
     parts.append("请生成打招呼语正文：")
     return "\n".join(parts)
 
 
 def _build_smart_prompts(job_title, company, hr_name, job_desc, is_boss, resume_summary, style_hint, optimize_hints=""):
-    """smart 模式：消费用户在前端填的 smart_greeting_prompt（规则化）。"""
+    """smart 模式：消费用户在前端填的 smart_greeting_prompt（规则化）。
+
+    核心改造：简历驱动而非 JD 驱动。先展示真实经历（只能从简历中引用），
+    再展示 JD 要求，让 LLM 找交集而非把 JD 要求当作自己的技能。
+    """
     # RAG: 检索历史相似JD的招呼语经验
     rag_context = ""
     if job_desc and len(job_desc.strip()) >= 20:
@@ -465,31 +485,45 @@ def _build_smart_prompts(job_title, company, hr_name, job_desc, is_boss, resume_
     if not user_rules.strip():
         user_rules = (
             "规则：\n"
-            "1. 严格从下面的JD中找到3个核心能力要求，每个不超过10个字，尽量引用JD原词\n"
-            "2. 方向必须从JD关键词中提取（如JD写项目管理→方向就是项目管理，JD写AI产品→方向就是AI产品）\n"
-            "3. 严格按以下格式，不要自己编方向，不要加解释：\n\n"
-            "您好，我的方向是【从JD提取的方向词】，擅长【能力1】、【能力2】、【能力3】，看到贵司的JD觉得很匹配，方便聊聊吗？"
+            "1. 从下方「真实经历」中提取求职者已有的2-3个技能/经验，每个不超过10个字\n"
+            "2. 从下方「岗位JD」中提取1个最匹配的方向词\n"
+            "3. 格式（不要自己编方向，不要加解释）：\n"
+            "您好，我的方向是【从JD提取的方向词】，我在【简历中的技能1】、【简历中的技能2】方面有实际经验，看到贵司的JD觉得很匹配，方便聊聊吗？"
         )
 
+    # 先放简历（真实经历），再放 JD（目标岗位），物理分隔防止 LLM 混淆
+    user_prompt_parts = [
+        "=== 真实经历（只能从这里引用技能和经验，禁止编造以下未包含的内容） ===",
+    ]
+    if resume_summary:
+        user_prompt_parts.append(resume_summary[:400])
+    else:
+        user_prompt_parts.append("（未提供简历摘要，请用兴趣/学习方向等方式表达，不要声称具体实习经验）")
+    if optimize_hints:
+        user_prompt_parts.append(f"简历优化方向（用于发现可强调的已有技能）:\n{optimize_hints[:300]}")
+
+    user_prompt_parts.append("")
+    user_prompt_parts.append("=== 岗位JD（目标岗位要求，用于找匹配方向，不要把这些要求当作自己的技能 ===")
+    user_prompt_parts.append(f"招聘公司: {company or '未知'}")
+    user_prompt_parts.append(f"岗位名称: {job_title or '未知'}")
+    if job_desc:
+        user_prompt_parts.append(f"岗位职责与要求: {job_desc[:600]}")
+    if rag_context:
+        user_prompt_parts.append(f"\n历史相似岗位的招呼语参考（风格参考，不要照抄内容）:\n{rag_context[:500]}")
+
+    user_prompt_parts.append("\n请按上方规则生成一行招呼语：")
+
     system_prompt = (
-        "你是求职者本人，按下方「用户规则」严格生成一段打招呼语。\n"
-        "- 只输出最终招呼语正文一行，不要任何解释、不要引号、不要JSON\n"
-        "- 不出现微信/电话/QQ等联系方式（BOSS会拦截）\n"
-        "- 方向和能力必须从下面提供的JD中提取，禁止编造不相关内容\n"
-        f"- 称呼：{hr_name or '不带称呼'}\n"
-        f"- 风格：{style_hint}\n"
+        "你是求职者的写作助理，帮他生成BOSS直聘打招呼语。你不是求职者本人，你是在帮他写。\n\n"
+        "硬性规则——违反以下任何一条都会导致招呼语被拦截：\n"
+        "1. 只能声称「真实经历」中明确写到的技能和经历，一字不差地从简历中引用\n"
+        "2. 如果简历中没有写某个实习/项目/技能，绝对不能编造——用「我对X方向感兴趣」代替「我有X经验」\n"
+        "3. 「岗位JD」中的要求是目标方向参考，不是你的经历，不要混为一谈\n"
+        "4. 不出现微信/电话/QQ等联系方式\n"
+        f"5. 称呼：{hr_name or '不带称呼'}\n"
+        f"6. 风格：{style_hint}\n"
+        "7. 只输出招呼语正文一行，不要任何解释、不要引号、不要JSON\n\n"
         f"=== 用户规则 ===\n{user_rules}\n"
     )
 
-    user_prompt_parts = [
-        f"招聘公司: {company or '未知'}",
-        f"岗位名称: {job_title or '未知'}",
-    ]
-    if job_desc:
-        user_prompt_parts.append(f"岗位JD（节选）: {job_desc[:600]}")
-    if resume_summary:
-        user_prompt_parts.append(f"我的简历摘要: {resume_summary[:300]}")
-    if optimize_hints:
-        user_prompt_parts.append(f"简历优化提示（参考这些方向提取能力关键词）:\n{optimize_hints[:400]}")
-    user_prompt_parts.append("请按上方规则生成一行招呼语：")
     return system_prompt, "\n".join(user_prompt_parts)

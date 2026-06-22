@@ -2460,6 +2460,7 @@ function handleWS(msg){
     case'transfer_requested':if(activeTab==='transfer')loadTransferRequests();else showTransferBadge();toast('HR 要求转人工','warn');break;
     case'monitor_paused':case'monitor_resumed':case'system':refreshStatus();break;
     case'agent_started':onAgentStarted(msg);break;
+    case'agent_plan':onAgentPlan(msg);break;
     case'agent_step':onAgentStep(msg);break;
     case'agent_complete':onAgentComplete(msg);break;
     case'agent_error':onAgentError(msg);break;
@@ -3400,12 +3401,34 @@ function onAgentStarted(msg){
   log.innerHTML='<div class="step"><span class="step-num">▶</span><span class="thought">目标: <b>'+esc(msg.goal||'')+'</b></span><span style="color:var(--text-3);font-size:11px;">  最大步数: '+(msg.max_steps||'?')+'</span></div>';
 }
 
+function onAgentPlan(msg){
+  const log=document.getElementById('agentLog');
+  let html='<div class="step plan-header"><span class="step-num" style="background:var(--accent);">📋</span><span class="thought">执行计划</span></div>';
+  if(msg.analysis)html+='<div class="thought" style="color:var(--text-2);margin:4px 0 8px 28px;">'+esc(msg.analysis)+'</div>';
+  const plan=msg.plan||[];
+  plan.forEach((s,i)=>{
+    html+='<div class="step" style="margin-left:14px;opacity:0.85;">';
+    html+='<span class="step-num" style="font-size:10px;min-width:18px;">'+(i+1)+'</span>';
+    html+='<span class="tool-name">'+esc(s.tool||'?')+'</span>';
+    if(s.reason)html+='<span class="thought" style="font-size:11px;color:var(--text-3);margin-left:6px;">'+esc(s.reason)+'</span>';
+    html+='</div>';
+  });
+  if(msg.constraints&&msg.constraints.length){
+    html+='<div style="color:var(--yellow);font-size:11px;margin:4px 0 0 28px;">⚠ 约束: '+esc(msg.constraints.join(', '))+'</div>';
+  }
+  log.innerHTML+=html;
+  log.scrollTop=log.scrollHeight;
+}
+
 function onAgentStep(msg){
   const log=document.getElementById('agentLog');
-  const cls=msg.result_preview&&msg.result_preview.startsWith('错误')?'error':'success';
+  let cls='success';
+  if(msg.error)cls='error';
+  else if(msg.skipped)cls='skip';
+  else if(msg.result_preview&&msg.result_preview.startsWith('错误'))cls='error';
   let html='<div class="step">';
   html+='<span class="step-num '+cls+'">#'+msg.step+'</span>';
-  if(msg.tool)html+='<span class="tool-name">'+esc(msg.tool)+'</span>';
+  if(msg.tool)html+='<span class="tool-name">'+esc(msg.tool)+(msg.skipped?' (跳过)':'')+'</span>';
   if(msg.thought)html+='<div class="thought">'+esc(msg.thought)+'</div>';
   if(msg.result_preview)html+='<div class="result-preview">'+esc(msg.result_preview)+'</div>';
   html+='</div>';
@@ -3419,8 +3442,12 @@ function onAgentComplete(msg){
   document.getElementById('agentStopBtn').style.display='none';
   document.getElementById('agentStopBtn').disabled=true;
   document.getElementById('agentRunning').style.display='none';
+  const status=msg.status||'completed';
+  const labels={completed:'✅ 任务完成',partial:'⚠️ 部分完成',aborted:'❌ 已中止'};
+  const log=document.getElementById('agentLog');
+  log.innerHTML+='<div class="step"><span class="step-num '+(status==='completed'?'success':'error')+'">'+(labels[status]||status)+'</span> 共'+msg.steps+'步'+(msg.replans?'，重规划'+msg.replans+'次':'')+'</div>';
   if(msg.summary)renderAgentSummary(msg.summary,{});
-  toast('Agent 执行完毕','success');
+  toast(labels[status]||'Agent 执行完毕',status==='completed'?'success':(status==='aborted'?'error':'warn'));
 }
 
 function onAgentError(msg){
