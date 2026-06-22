@@ -83,16 +83,18 @@ def llm_chat_ollama(messages: list, system_prompt: Optional[str] = None, tempera
     if system_prompt:
         messages = [{"role": "system", "content": system_prompt}] + messages
 
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 Ollama 大模型... (model={LLM_MODEL}, messages={msg_count}, temp={temperature})")
-    print("─" * 60)
-    for i, m in enumerate(messages):
-        role = m["role"]
-        content = m["content"]
-        display = content if len(content) <= 3000 else content[:3000] + f"\n... [截断，原{len(content)}字符]"
-        print(f"[LLM INPUT {i+1}/{msg_count}] {role}:")
-        print(display)
-        print()
-    print("─" * 60)
+    _total_chars = sum(len(m.get("content", "")) for m in messages)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 Ollama 大模型... (model={LLM_MODEL}, messages={msg_count}, context={_total_chars}chars, temp={temperature})")
+    if os.environ.get("LAKEJOB_DEBUG_LLM"):
+        print("─" * 60)
+        for i, m in enumerate(messages):
+            role = m["role"]
+            content = m["content"]
+            display = content if len(content) <= 3000 else content[:3000] + f"\n... [截断，原{len(content)}字符]"
+            print(f"[LLM INPUT {i+1}/{msg_count}] {role}:")
+            print(display)
+            print()
+        print("─" * 60)
 
     payload = {
         "model": LLM_MODEL,
@@ -125,16 +127,20 @@ def llm_chat_deepseek(messages: list, system_prompt: Optional[str] = None, tempe
         messages = [{"role": "system", "content": system_prompt}] + messages
 
     msg_count = len(messages)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API... (model={cfg['model']}, url={cfg['base_url']}, messages={msg_count}, temp={temperature})")
-    print("─" * 60)
-    for i, m in enumerate(messages):
-        role = m["role"]
-        content = m["content"]
-        display = content if len(content) <= 3000 else content[:3000] + f"\n... [截断，原{len(content)}字符]"
-        print(f"[LLM INPUT {i+1}/{msg_count}] {role}:")
-        print(display)
-        print()
-    print("─" * 60)
+    _total_chars = sum(len(m.get("content", "")) for m in messages)
+    _debug = cfg.get("debug_llm_context", False)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔄 正在调用 AI API... (model={cfg['model']}, messages={msg_count}, context={_total_chars}chars, temp={temperature})")
+
+    if _debug:
+        print("─" * 60)
+        for i, m in enumerate(messages):
+            role = m["role"]
+            content = m["content"]
+            display = content if len(content) <= 3000 else content[:3000] + f"\n... [截断，原{len(content)}字符]"
+            print(f"[LLM INPUT {i+1}/{msg_count}] {role}:")
+            print(display)
+            print()
+        print("─" * 60)
 
     payload = {
         "model": cfg["model"],
@@ -143,6 +149,8 @@ def llm_chat_deepseek(messages: list, system_prompt: Optional[str] = None, tempe
         "stream": False,
     }
 
+    _timeout = httpx.Timeout(120.0, connect=15.0)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 正在发送 API 请求...")
     resp = httpx.post(
         f"{cfg['base_url']}/chat/completions",
         json=payload,
@@ -150,8 +158,10 @@ def llm_chat_deepseek(messages: list, system_prompt: Optional[str] = None, tempe
             "Authorization": f"Bearer {cfg['api_key']}",
             "Content-Type": "application/json",
         },
-        timeout=120,
+        timeout=_timeout,
+        verify=False,
     )
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 API 响应已收到 (status={resp.status_code})")
     resp.raise_for_status()
     data = resp.json()
     elapsed = time.time() - t0

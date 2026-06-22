@@ -1452,7 +1452,57 @@ class BossAutomation(BossScraper):
 
             pause(1.2, 2.2)
 
-            # 等弹窗 → 点「发送」按钮
+            # ==========================================
+            # 弹窗出来后，需要先勾选一份简历，"发送"按钮才会从 disabled 变 enabled
+            # ==========================================
+            _resume_selected = False
+            for _sel_attempt in range(10):
+                try:
+                    _sel_result = self.page.evaluate(
+                        """() => {
+                            const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"], [class*="modal"]');
+                            for (const dlg of dlgs) {
+                                if (dlg.offsetParent === null) continue;
+                                const radios = dlg.querySelectorAll('input[type="radio"], input[type="checkbox"]');
+                                for (const r of radios) {
+                                    if (r.offsetParent !== null && !r.checked) {
+                                        const label = r.closest('label') || r.parentElement;
+                                        if (label) { label.click(); return {ok: true, method: 'radio'}; }
+                                    }
+                                }
+                                const items = dlg.querySelectorAll('li, .resume-item, [class*="resume"], [class*="item"]');
+                                for (const item of items) {
+                                    const txt = (item.innerText || '').trim();
+                                    if ((txt.includes('在线简历') || txt.includes('附件简历')) && item.offsetParent !== null) {
+                                        item.click();
+                                        return {ok: true, method: 'resume-item', txt: txt.slice(0, 30)};
+                                    }
+                                }
+                            }
+                            const allRadios = document.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked');
+                            for (const r of allRadios) {
+                                const txt = (r.closest('label')?.innerText || r.parentElement?.innerText || '').trim();
+                                if (txt.includes('简历')) {
+                                    return {ok: true, method: 'already-checked', txt: txt.slice(0, 30)};
+                                }
+                            }
+                            return {ok: false};
+                        }"""
+                    )
+                    if isinstance(_sel_result, dict) and _sel_result.get("ok"):
+                        print(f"  [发简历] 已选择简历 ({_sel_result.get('method')})")
+                        _resume_selected = True
+                        break
+                except Exception:
+                    pass
+                pause(0.8, 1.5)
+
+            if not _resume_selected:
+                print(f"  ⚠️ send_resume: 未能选择简历项（弹窗中无可用简历）")
+
+            pause(1.5, 2.5)
+
+            # 点「发送」按钮（此时应已 enabled）
             for attempt in range(8):
                 try:
                     confirmed = self.page.evaluate(
@@ -1460,14 +1510,16 @@ class BossAutomation(BossScraper):
                             const sels = ['.btn-sure-v2.btn-confirm', '.choose-resume-dialog .btn-confirm', '.boss-popup__content .btn-confirm'];
                             for (const sel of sels) {
                                 const el = document.querySelector(sel);
-                                if (el && el.offsetParent !== null) { el.click(); return {ok: true, sel: sel}; }
+                                if (el && el.offsetParent !== null && !el.disabled && !el.classList.contains('disabled')) {
+                                    el.click(); return {ok: true, sel: sel};
+                                }
                             }
-                            // 按文本"发送"在弹窗内找
                             const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"]');
                             for (const dlg of dlgs) {
                                 if (dlg.offsetParent === null) continue;
                                 const btns = dlg.querySelectorAll('button, .btn, [class*="btn"]');
                                 for (const b of btns) {
+                                    if (b.disabled || b.classList.contains('disabled')) continue;
                                     const txt = (b.innerText || '').trim();
                                     if ((txt === '发送' || txt === '确定' || txt === '确认发送') && b.offsetParent !== null) {
                                         b.click();
@@ -1479,18 +1531,18 @@ class BossAutomation(BossScraper):
                         }"""
                     )
                     if isinstance(confirmed, dict) and confirmed.get("ok"):
-                        pause(0.5, 1)
+                        pause(0.8, 1.5)
                         print(f"  [发简历] 已点发送按钮 ({confirmed.get('sel') or confirmed.get('txt')})")
                         return True
                 except Exception:
                     pass
-                time.sleep(0.4)
+                pause(0.8, 1.5)
 
             # 兜底：原 selector
             confirm = self._find_element(SELECTORS["resume_confirm_btn"], timeout_ms=2000)
             if confirm:
                 confirm.click()
-                pause(0.5, 1)
+                pause(0.8, 1.5)
                 print("  [发简历] 已点发送按钮 (selector fallback)")
                 return True
 
@@ -2407,6 +2459,94 @@ class BossAutomation(BossScraper):
                         else:
                             print(f"  [监控] 回复发送失败!")
                         pause(5, 15)
+
+                        # ══════════════════════════════════════
+                        # 回复后再扫描：防止HR在等待期间发新消息被自动已读
+                        # 问题：回复+等待期间HR回复多条消息，BOSS自动已读，
+                        # 下个周期 poll_conversation_list 在"未读"tab看不到此会话
+                        # 解决：回复后重新扫描当前会话，有新未回复HR消息则追加回复
+                        # ══════════════════════════════════════
+                        _recheck_rounds = 0
+                        _max_recheck = 2
+                        while _recheck_rounds < _max_recheck:
+                            _recheck_rounds += 1
+                            pause(1, 2)
+                            _msgs2 = self.read_visible_messages()
+                            _clean2 = []
+                            for _m2 in _msgs2:
+                                _s2 = _m2.get("sender", "hr")
+                                _c2 = (_m2.get("content") or "").strip()
+                                if not _c2:
+                                    continue
+                                _clean2.append({"sender": _s2, "content": _c2, "status": _m2.get("status", "")})
+
+                            if not _clean2 or len(_clean2) <= len(clean_msgs):
+                                print(f"  [监控] 无新消息，退出再检查 (round={_recheck_rounds})")
+                                break
+
+                            # 有新消息，保存到DB
+                            print(f"  [监控] 检测到新消息 ({len(_clean2)} 条, 原{len(clean_msgs)}条)，重新保存")
+                            replace_conversation_messages(conv_id, _clean2)
+
+                            # 找最新一条未回复的HR消息
+                            _new_hr_msg = None
+                            for _i2 in range(len(_clean2) - 1, -1, -1):
+                                _m2 = _clean2[_i2]
+                                if _m2["sender"] == "me":
+                                    continue
+                                if _is_system_notification(_m2["content"]):
+                                    continue
+                                _has_my_reply = any(
+                                    _clean2[_j]["sender"] == "me" for _j in range(_i2 + 1, len(_clean2))
+                                )
+                                if not _has_my_reply:
+                                    _new_hr_msg = _m2["content"]
+                                    break
+
+                            if not _new_hr_msg:
+                                print(f"  [监控] 新消息已全部回复，退出再检查")
+                                break
+
+                            print(f"  [监控] 再检查发现待回复HR消息: {_new_hr_msg[:60]}...")
+
+                            # 检查日配额
+                            _today_replies = get_today_auto_reply_count()
+                            if _today_replies >= MAX_AUTO_REPLY_PER_DAY:
+                                print(f"  [监控] 再回复已达日上限({MAX_AUTO_REPLY_PER_DAY}条), 跳过")
+                                break
+
+                            if not self._respect_cooldown():
+                                print(f"  [监控] 再回复风控冷却中, 跳过")
+                                break
+
+                            self._human_pace(min_gap=3.0, max_gap=8.0)
+
+                            try:
+                                _gen2 = generate_reply(conv_id, _new_hr_msg, job_info, style, resume, wechat)
+                                _reply2 = _gen2["reply"]
+                                if _reply2:
+                                    _think2 = random.uniform(2, 4) + min(len(_reply2) * 0.05, 5)
+                                    time.sleep(_think2)
+                                    if self.send_message(_reply2):
+                                        add_message(conv_id, "me", _reply2, ai_generated=True)
+                                        update_conversation_last_message(conv_id, _reply2, "me", 0)
+                                        increment_daily_stat("auto_replies_sent")
+                                        result["replies_sent"] += 1
+                                        _interest2 = _gen2.get("interest", "")
+                                        if _interest2:
+                                            update_conversation_interest(conv_id, _interest2)
+                                        print(f"  [监控] 追回回复已发送: {_reply2[:40]}...")
+                                        clean_msgs = _clean2  # 更新基线，下一轮检查用
+                                        pause(3, 8)
+                                    else:
+                                        print(f"  [监控] 追回回复发送失败!")
+                                        break
+                                else:
+                                    print(f"  [监控] 追回回复为空，跳过")
+                                    break
+                            except Exception as _e2:
+                                print(f"  ⚠️ 追回回复生成失败: {_e2}")
+                                break
                 except Exception as e:
                     print(f"  ⚠️ AI回复生成失败: {e}")
             elif unreplied_hr_msg and not auto_reply_enabled:
