@@ -1498,33 +1498,43 @@ class BossAutomation(BossScraper):
                 pause(0.8, 1.5)
 
             if not _resume_selected:
-                print(f"  ⚠️ send_resume: 未能选择简历项（弹窗中无可用简历）")
+                print(f"  ⚠️ send_resume: 未能选择简历项（弹窗中无可用简历），请确认BOSS账号已上传简历")
+                try:
+                    close_btn = self.page.locator('[class*="dialog-close"], [class*="close"]').first
+                    if close_btn.is_visible():
+                        close_btn.click()
+                except Exception:
+                    pass
+                return False
 
             pause(1.5, 2.5)
 
-            # 点「发送」按钮（此时应已 enabled）
+            # 点「发送」按钮（用 JS 原生 click 绕过 chat-op 遮挡）
             for attempt in range(8):
                 try:
                     confirmed = self.page.evaluate(
                         """() => {
-                            const sels = ['.btn-sure-v2.btn-confirm', '.choose-resume-dialog .btn-confirm', '.boss-popup__content .btn-confirm'];
-                            for (const sel of sels) {
-                                const el = document.querySelector(sel);
-                                if (el && el.offsetParent !== null && !el.disabled && !el.classList.contains('disabled')) {
-                                    el.click(); return {ok: true, sel: sel};
-                                }
-                            }
-                            const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"]');
+                            // 直接找弹窗内的发送/确定按钮（不依赖特定 class 组合）
+                            const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"], [class*="modal"]');
                             for (const dlg of dlgs) {
                                 if (dlg.offsetParent === null) continue;
                                 const btns = dlg.querySelectorAll('button, .btn, [class*="btn"]');
                                 for (const b of btns) {
                                     if (b.disabled || b.classList.contains('disabled')) continue;
                                     const txt = (b.innerText || '').trim();
-                                    if ((txt === '发送' || txt === '确定' || txt === '确认发送') && b.offsetParent !== null) {
-                                        b.click();
-                                        return {ok: true, txt: txt};
+                                    if (txt === '发送' || txt === '确定' || txt === '确认发送') {
+                                        b.click(); return {ok: true, txt: txt};
                                     }
+                                }
+                            }
+                            // 兜底：不限制在弹窗内，找页面上任何可见的发送/确定按钮
+                            const allBtns = document.querySelectorAll('button, .btn, [class*="btn"]');
+                            for (const b of allBtns) {
+                                if (b.disabled || b.classList.contains('disabled')) continue;
+                                if (b.offsetParent === null) continue;
+                                const txt = (b.innerText || '').trim();
+                                if (txt === '发送') {
+                                    b.click(); return {ok: true, txt: txt, fallback: true};
                                 }
                             }
                             return {ok: false};
@@ -1538,13 +1548,29 @@ class BossAutomation(BossScraper):
                     pass
                 pause(0.8, 1.5)
 
-            # 兜底：原 selector
-            confirm = self._find_element(SELECTORS["resume_confirm_btn"], timeout_ms=2000)
-            if confirm:
-                confirm.click()
+            # 兜底：用 JS 直接点击发送按钮（绕过 chat-op overlay）
+            try:
+                self.page.evaluate("""() => {
+                    const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"]');
+                    for (const dlg of dlgs) {
+                        if (dlg.offsetParent === null) continue;
+                        const btns = dlg.querySelectorAll('button');
+                        for (const b of btns) {
+                            if (b.disabled || b.classList.contains('disabled')) continue;
+                            const txt = (b.innerText || '').trim();
+                            if (txt === '发送' || txt === '确定' || txt === '确认发送') {
+                                b.click();
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                }""")
                 pause(0.8, 1.5)
-                print("  [发简历] 已点发送按钮 (selector fallback)")
+                print("  [发简历] 已点发送按钮 (JS fallback)")
                 return True
+            except Exception:
+                pass
 
             print("  [发简历] 无弹窗，按钮已点击但未确认")
             return True
@@ -2139,6 +2165,10 @@ class BossAutomation(BossScraper):
             print(f"[监控] 未读会话 {len(conversations)} 个，本轮处理前3个")
             conversations = conversations[:3]
 
+        _processed_conv_ids = set()  # 追踪已处理的会话ID，供DB兜底去重
+        _reply_count = 0             # 本轮已回复数，最多3条
+        _MAX_REPLIES_THIS_CYCLE = 3
+
         for idx, conv_data in enumerate(conversations):
             print(f"\n[监控] --- 处理会话 {idx+1}/{len(conversations)} ---")
             text = conv_data.get("text", "")
@@ -2216,10 +2246,12 @@ class BossAutomation(BossScraper):
                 if not matched_conv:
                     continue
                 print(f"  [监控] 新建会话: {hr_name}")
+                _processed_conv_ids.add(conv_id)
                 # 标记用于 WebSocket 广播
                 result.setdefault("new_conversations", []).append(hr_name)
             else:
                 conv_id = matched_conv["id"]
+                _processed_conv_ids.add(conv_id)
                 # 提取的名字比 DB 更精确时自动修正
                 if extracted_name and len(extracted_name) >= 2:
                     old_name = matched_conv.get("hr_name", "")
@@ -2260,12 +2292,15 @@ class BossAutomation(BossScraper):
                         pass
 
             if matched_conv.get("status") != "active":
+                print(f"  [监控] 跳过: 会话状态={matched_conv.get('status')}，非active")
                 continue
             if not matched_conv.get("auto_reply_enabled"):
+                print(f"  [监控] 跳过: auto_reply_enabled=False")
                 continue
 
             # 读取消息：打开会话从 DOM 提取
             hr_name_to_open = matched_conv["hr_name"]
+            print(f"  [监控] 匹配到会话 id={conv_id} hr={hr_name_to_open}，正在打开...")
             opened = self.open_conversation_by_name(hr_name_to_open)
             if not opened and len(hr_name_to_open) > 4:
                 short = re.match(r"^[\u4e00-\u9fff]{2,3}", hr_name_to_open)
@@ -2352,10 +2387,16 @@ class BossAutomation(BossScraper):
 
             if unreplied_hr_msg:
                 result["new_messages"] += 1
+            else:
+                print(f"  [监控] 无待回复HR消息 (msgs={len(clean_msgs)}, last_sender={clean_msgs[-1]['sender'] if clean_msgs else 'none'})")
 
             # 自动回复
             auto_reply_enabled = get_setting("auto_reply_enabled", "false") == "true"
-            if unreplied_hr_msg and auto_reply_enabled:
+            if unreplied_hr_msg and not auto_reply_enabled:
+                print(f"  [监控] 有待回复消息但自动回复已关闭，跳过")
+            if unreplied_hr_msg and auto_reply_enabled and _reply_count >= _MAX_REPLIES_THIS_CYCLE:
+                print(f"  [监控] 本轮已回复{_reply_count}条(上限{_MAX_REPLIES_THIS_CYCLE})，该会话消息已保存，下轮或DB兜底处理")
+            if unreplied_hr_msg and auto_reply_enabled and _reply_count < _MAX_REPLIES_THIS_CYCLE:
                 print(f"[监控] 自动回复: 已启用, 开始生成回复...")
                 today_replies = get_today_auto_reply_count()
                 if today_replies >= MAX_AUTO_REPLY_PER_DAY:
@@ -2366,8 +2407,6 @@ class BossAutomation(BossScraper):
                 if not self._respect_cooldown():
                     print(f"[监控] 自动回复: 风控冷却中, 跳过")
                     continue
-
-                self._human_pace(min_gap=5.0, max_gap=15.0)
 
                 try:
                     from boss_replier import generate_reply
@@ -2444,21 +2483,24 @@ class BossAutomation(BossScraper):
 
                         # 然后再发送AI回复
                         print(f"  [监控] AI回复: {reply[:60]}...")
-                        # 模拟真人"看到消息→思考→打字"的延迟，按回复长度浮动
-                        think = random.uniform(2, 5) + min(len(reply) * 0.05, 6)
+                        # 两次高风险操作之间保持人性化间隔
+                        self._human_pace(min_gap=5.0, max_gap=15.0)
+                        # 模拟真人"看到消息→思考→打字"的延迟
+                        think = random.uniform(1, 3) + min(len(reply) * 0.03, 3)
                         time.sleep(think)
                         if self.send_message(reply):
                             add_message(conv_id, "me", reply, ai_generated=True)
                             update_conversation_last_message(conv_id, reply, "me", 0)
                             increment_daily_stat("auto_replies_sent")
                             result["replies_sent"] += 1
+                            _reply_count += 1
                             if interest:
                                 update_conversation_interest(conv_id, interest)
                                 print(f"  [监控] HR兴趣度: {interest}")
                             print(f"  [监控] 回复已发送")
                         else:
                             print(f"  [监控] 回复发送失败!")
-                        pause(5, 15)
+                        pause(2, 5)
 
                         # ══════════════════════════════════════
                         # 回复后再扫描：防止HR在等待期间发新消息被自动已读
@@ -2519,25 +2561,25 @@ class BossAutomation(BossScraper):
                                 print(f"  [监控] 再回复风控冷却中, 跳过")
                                 break
 
-                            self._human_pace(min_gap=3.0, max_gap=8.0)
-
                             try:
                                 _gen2 = generate_reply(conv_id, _new_hr_msg, job_info, style, resume, wechat)
                                 _reply2 = _gen2["reply"]
                                 if _reply2:
-                                    _think2 = random.uniform(2, 4) + min(len(_reply2) * 0.05, 5)
+                                    self._human_pace(min_gap=3.0, max_gap=8.0)
+                                    _think2 = random.uniform(1, 2) + min(len(_reply2) * 0.03, 3)
                                     time.sleep(_think2)
                                     if self.send_message(_reply2):
                                         add_message(conv_id, "me", _reply2, ai_generated=True)
                                         update_conversation_last_message(conv_id, _reply2, "me", 0)
                                         increment_daily_stat("auto_replies_sent")
                                         result["replies_sent"] += 1
+                                        _reply_count += 1
                                         _interest2 = _gen2.get("interest", "")
                                         if _interest2:
                                             update_conversation_interest(conv_id, _interest2)
                                         print(f"  [监控] 追回回复已发送: {_reply2[:40]}...")
                                         clean_msgs = _clean2  # 更新基线，下一轮检查用
-                                        pause(3, 8)
+                                        pause(1, 3)
                                     else:
                                         print(f"  [监控] 追回回复发送失败!")
                                         break
@@ -2565,6 +2607,121 @@ class BossAutomation(BossScraper):
             except Exception:
                 pass
             pause(0.5, 1)
+
+        # ── DB 兜底：处理 has_unreplied=1 但 DOM 扫描没覆盖到的会话 ──
+        try:
+            from boss_state import list_unreplied_conversations
+            db_unreplied = list_unreplied_conversations()
+            if db_unreplied:
+                print(f"[监控] DB兜底: 发现 {len(db_unreplied)} 个 has_unreplied=1 的会话")
+                for db_conv in db_unreplied:
+                    conv_id_db = db_conv["id"]
+                    if conv_id_db in _processed_conv_ids:
+                        continue  # DOM 轮已处理过
+                    hr_name_db = db_conv.get("hr_name", "")
+                    if not hr_name_db or len(hr_name_db) < 2:
+                        continue
+                    print(f"  [监控] DB兜底: 尝试处理会话 id={conv_id_db} hr={hr_name_db}")
+                    if not self._respect_cooldown():
+                        continue
+                    opened_db = self.open_conversation_by_name(hr_name_db)
+                    if not opened_db:
+                        continue
+                    pause(1, 2)
+                    msgs_db = self.read_visible_messages()
+                    print(f"  [监控] DB兜底: 读到 {len(msgs_db)} 条消息")
+                    if not msgs_db:
+                        continue
+                    clean_db = []
+                    for m in msgs_db:
+                        s = m.get("sender", "hr")
+                        c = (m.get("content") or "").strip()
+                        if not c:
+                            continue
+                        clean_db.append({"sender": s, "content": c, "status": m.get("status", "")})
+                    if clean_db:
+                        replace_conversation_messages(conv_id_db, clean_db)  # has_unreplied 在此自动更新
+                    # 找未回复的HR消息
+                    auto_enabled = get_setting("auto_reply_enabled", "false") == "true"
+                    if not auto_enabled:
+                        continue
+                    today_r = get_today_auto_reply_count()
+                    if today_r >= MAX_AUTO_REPLY_PER_DAY:
+                        continue
+                    _sys_pfx = (
+                        "你与该职位竞争者PK情况", "竞争力分析", "BOSS安全提示",
+                        "系统消息", "沟通分析", "今日推荐", "该Boss已查看了你的简历",
+                    )
+                    unreplied_db = None
+                    for i2 in range(len(clean_db) - 1, -1, -1):
+                        _m2 = clean_db[i2]
+                        if _m2["sender"] == "me":
+                            continue
+                        if (_m2["content"] or "").startswith(_sys_pfx):
+                            continue
+                        _has_r = any(
+                            clean_db[j2]["sender"] == "me"
+                            for j2 in range(i2 + 1, len(clean_db))
+                        )
+                        if not _has_r:
+                            unreplied_db = _m2["content"]
+                            break
+                    if not unreplied_db:
+                        continue
+                    result["new_messages"] += 1
+                    self._human_pace(min_gap=5.0, max_gap=15.0)
+                    # 复用已有的 job_info 查询逻辑
+                    job_title_db = db_conv.get("job_title", "")
+                    job_company_db = db_conv.get("hr_company", "")
+                    job_desc_db = ""
+                    app_id_db = db_conv.get("application_id")
+                    if app_id_db:
+                        try:
+                            from boss_state import get_application
+                            app_db = get_application(app_id_db)
+                            if app_db:
+                                job_desc_db = app_db.get("description") or ""
+                                job_title_db = job_title_db or app_db.get("job_title", "")
+                                job_company_db = job_company_db or app_db.get("company", "")
+                        except Exception:
+                            pass
+                    job_info_db = {
+                        "title": job_title_db,
+                        "company": job_company_db,
+                        "description": job_desc_db,
+                    }
+                    style_db = get_setting("ai_reply_style", "professional")
+                    resume_db = get_setting("resume_summary", "")
+                    wechat_db = get_setting("wechat_id", "")
+                    try:
+                        from boss_replier import generate_reply
+                        gen_db = generate_reply(conv_id_db, unreplied_db, job_info_db, style_db, resume_db, wechat_db)
+                        reply_db = gen_db.get("reply", "")
+                        if reply_db:
+                            think_db = random.uniform(1, 3) + min(len(reply_db) * 0.03, 3)
+                            time.sleep(think_db)
+                            if self.send_message(reply_db):
+                                add_message(conv_id_db, "me", reply_db, ai_generated=True)
+                                update_conversation_last_message(conv_id_db, reply_db, "me", 0)
+                                increment_daily_stat("auto_replies_sent")
+                                result["replies_sent"] += 1
+                                _reply_count += 1
+                                interest_db = gen_db.get("interest", "")
+                                if interest_db:
+                                    update_conversation_interest(conv_id_db, interest_db)
+                                print(f"  [监控] DB兜底回复已发送: {reply_db[:40]}...")
+                            else:
+                                print(f"  [监控] DB兜底回复发送失败!")
+                            pause(2, 5)
+                    except Exception as e_db:
+                        print(f"  [监控] DB兜底回复生成失败: {e_db}")
+                # DB兜底后切回「全部」Tab，避免状态残留
+                try:
+                    self._click_chat_tab("全部")
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"  [监控] DB兜底异常: {e}")
 
         # 监控循环结束后切回「全部」Tab，避免 BOSS 页面长期停留在未读视图（P09）
         try:

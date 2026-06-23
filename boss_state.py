@@ -170,6 +170,10 @@ def init_db():
     except sqlite3.OperationalError:
         pass
     try:
+        db.execute("ALTER TABLE conversations ADD COLUMN has_unreplied INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    try:
         db.execute("CREATE INDEX IF NOT EXISTS idx_applications_company_id ON applications(company_id)")
     except sqlite3.OperationalError:
         pass
@@ -581,6 +585,15 @@ def list_active_conversations() -> List[dict]:
     )
 
 
+def list_unreplied_conversations() -> List[dict]:
+    """返回 has_unreplied=1 且 status=active 且 auto_reply_enabled=1 的会话"""
+    return _rows_to_list(
+        get_db().execute(
+            "SELECT * FROM conversations WHERE has_unreplied=1 AND status='active' AND auto_reply_enabled=1 ORDER BY updated_at DESC"
+        ).fetchall()
+    )
+
+
 def find_conversation_by_hr_name(hr_name: str) -> Optional[dict]:
     return _row_to_dict(
         get_db()
@@ -700,6 +713,12 @@ def add_message(
         "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (?, ?, ?, ?, ?)",
         (conversation_id, sender, content, delivery_status, 1 if ai_generated else 0),
     )
+    # 我发消息后标记为已回复
+    if sender == "me":
+        db.execute(
+            "UPDATE conversations SET has_unreplied=0, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (conversation_id,),
+        )
     db.commit()
     return cur.lastrowid
 
@@ -748,6 +767,28 @@ def replace_conversation_messages(conversation_id: int, messages: List[dict]):
             "INSERT INTO messages (conversation_id, sender, content, delivery_status, ai_generated) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, sender, content, delivery_status, ai_generated),
         )
+    # 自动判断: 最后一条非系统HR消息之后是否有"me"的回复
+    _system_prefixes = (
+        "你与该职位竞争者PK情况", "竞争力分析", "BOSS安全提示",
+        "系统消息", "沟通分析", "今日推荐", "该Boss已查看了你的简历",
+    )
+    _has_unreplied = 0
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.get("sender") != "hr":
+            continue
+        if (m.get("content") or "").startswith(_system_prefixes):
+            continue
+        _has_reply = any(
+            messages[j].get("sender") == "me"
+            for j in range(i + 1, len(messages))
+        )
+        _has_unreplied = 0 if _has_reply else 1
+        break
+    db.execute(
+        "UPDATE conversations SET has_unreplied=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (_has_unreplied, conversation_id),
+    )
     db.commit()
 
 
