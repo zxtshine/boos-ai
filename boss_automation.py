@@ -1249,6 +1249,45 @@ class BossAutomation(BossScraper):
         print(f"  ⚠️ securityId 获取失败（3次重试），HR: {hr_name}")
         return ""
 
+    def _click_chat_agree_button(self) -> bool:
+        """在聊天消息区内点击BOSS系统简历索取的「同意」按钮。
+
+        BOSS系统简历索取消息格式:
+            "我想要一份您的附件简历，您是否同意"
+            下面有两个按钮: [拒绝] [同意]
+        只需要点击「同意」即可，不需要走工具栏发简历弹窗流程。
+        """
+        try:
+            result = self.page.evaluate("""() => {
+                // 在消息列表里找所有可见元素中文本精确为"同意"的可点击元素
+                const all = document.querySelectorAll('span, button, div, a');
+                for (const el of all) {
+                    const txt = (el.innerText || el.textContent || '').trim();
+                    if (txt === '同意' && el.offsetParent !== null) {
+                        // 排除弹窗/对话框里的"同意"
+                        if (el.closest('.dialog, .popup, .modal, [class*="dialog"], [class*="popup"], [class*="modal"]')) {
+                            continue;
+                        }
+                        el.click();
+                        return true;
+                    }
+                }
+                // 兜底：匹配包含「同意」且文本较短的按钮
+                const btns = document.querySelectorAll('button, [class*="btn"], [role="button"]');
+                for (const b of btns) {
+                    const txt = (b.innerText || '').trim();
+                    if ((txt === '同意' || txt === '同意发送') && b.offsetParent !== null) {
+                        b.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            return bool(result)
+        except Exception as e:
+            print(f"  ⚠️ _click_chat_agree_button 异常: {e}")
+            return False
+
     def send_wechat(self, hr_name: str = "") -> bool:
         """通过 BOSS API 发起交换，等弹窗出现后点「确定」。"""
         try:
@@ -1498,14 +1537,8 @@ class BossAutomation(BossScraper):
                 pause(0.8, 1.5)
 
             if not _resume_selected:
-                print(f"  ⚠️ send_resume: 未能选择简历项（弹窗中无可用简历），请确认BOSS账号已上传简历")
-                try:
-                    close_btn = self.page.locator('[class*="dialog-close"], [class*="close"]').first
-                    if close_btn.is_visible():
-                        close_btn.click()
-                except Exception:
-                    pass
-                return False
+                # 可能简历已默认选中（弹窗里只有一份简历），直接尝试点发送
+                print(f"  [发简历] 未找到可点击的简历项（可能已默认选中），直接尝试点发送")
 
             pause(1.5, 2.5)
 
@@ -2367,6 +2400,7 @@ class BossAutomation(BossScraper):
                     "沟通分析",
                     "今日推荐",
                     "该Boss已查看了你的简历",
+                    "对方已查看了您的附件简历",
                 )
                 return any(content.startswith(p) for p in patterns)
 
@@ -2446,8 +2480,19 @@ class BossAutomation(BossScraper):
                         # 发简历：HR明确要求简历时，且未发送过
                         if any(kw in msg_lower for kw in ("简历", "cv", "resume")):
                             if not matched_conv.get("resume_sent"):
-                                print(f"  [监控] HR要简历，正在发送...")
-                                if self.send_resume():
+                                print(f"  [监控] HR要简历，正在处理...")
+                                # 先判断是不是 BOSS 系统级简历索取（消息里有"同意"按钮）
+                                resume_agreed = False
+                                if "同意" in unreplied_hr_msg and ("是否同意" in unreplied_hr_msg or "附件简历" in unreplied_hr_msg):
+                                    print(f"  [监控] 检测到BOSS系统简历索取，尝试点击聊天内「同意」按钮...")
+                                    resume_agreed = self._click_chat_agree_button()
+                                    if resume_agreed:
+                                        print(f"  [监控] 已点击同意发送简历")
+                                    else:
+                                        print(f"  [监控] 聊天内未找到同意按钮，回退工具栏发简历")
+                                if not resume_agreed:
+                                    resume_agreed = self.send_resume()
+                                if resume_agreed:
                                     from boss_state import mark_resume_sent
 
                                     mark_resume_sent(conv_id)

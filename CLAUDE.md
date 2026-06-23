@@ -7,7 +7,7 @@
 BOSS 直聘（zhipin.com）自动化求职工具，核心能力：
 - **搜索**：60+ 城市、福利关键词、薪资/经验/学历/规模/融资阶段多维筛选，支持多区+多规模
 - **批量投递**：翻页扫描 + 公司去重 + HR 活跃度过滤 + 法人识别优先排序 + 一键批量投递
-- **AI 接管聊天**：自动回复 HR（人格化）+ 自动交换微信/简历/电话 + 转人工检测
+- **AI 接管聊天**：自动回复 HR（人格化）+ 自动交换微信/简历/电话 + 转人工检测 + BOSS 系统简历索取处理 + DB 未读兜底检测
 - **AI 智能体**：Plan-then-Execute Agent 自主执行求职任务（一次规划→批量执行→异常重规划→总结）
 - **AI 分析**：岗位匹配度分析、简历优化（24h 缓存）、沟通建议（24h 缓存）
 - **面试练习**：独立 FastAPI 服务，Ollama 出题 + DeepSeek 批改 + 语义检索问答 + 薄弱点分析
@@ -34,9 +34,9 @@ BOSS 直聘（zhipin.com）自动化求职工具，核心能力：
 ```
 boss_app.py              # FastAPI 后端 —— REST API + WebSocket + 后台监控 + Agent + 面试端点
 boss_firefox.py           # BOSS 直聘搜索 + 详情 XHR + ANTI_DETECT JS 注入 + window.__bossApply 原生投递（Playwright 基类 BossScraper）
-boss_automation.py        # 自动化投递（hybrid: JS原生点击+Playwright兜底）+ 聊天 + 发简历/微信 + 风控冷却退避 + 人类行为模拟
-boss_replier.py            # AI 回复生成 + 打招呼语 + 简历优化上下文（调用 interview/llm_client）
-boss_state.py              # SQLite 数据持久化层（7 张表 + 线程本地连接）
+boss_automation.py        # 自动化投递（hybrid: JS原生点击+Playwright兜底）+ 聊天 + 发简历/微信 + 风控冷却退避 + 人类行为模拟 + DB未读兜底 + 回复上限
+boss_replier.py            # AI 回复生成 + 打招呼语 + 简历优化上下文 + 转人工引导（调用 interview/llm_client）
+boss_state.py              # SQLite 数据持久化层（7 张表 + has_unreplied 未读标记 + 线程本地连接）
 boss_company.py            # 公司画像聚合（岗位聚合 + HR 聚合 + 法人识别 + smart-send）
 boss_geo.py                # 城市/区/规模 BOSS 编码映射（惰性获取 + 6h 缓存 + 静态回退）
 boss_rag.py                # 历史 JD RAG 检索（余弦相似度 + embedding 缓存 + few-shot 上下文构建）
@@ -129,7 +129,7 @@ lakejob CLI (lakejob_cli/)
 | 表 | 用途 |
 |----|------|
 | `applications` | 投递记录（含 HR 活跃度、公司信息、法人、AI 优化结果缓存、JD embedding） |
-| `conversations` | HR 会话（含微信交换、兴趣度） |
+| `conversations` | HR 会话（含微信交换、兴趣度、has_unreplied 未读标记） |
 | `messages` | 聊天消息 |
 | `interview_sessions` | 面试会话持久化（暂停/恢复） |
 | `shortlists` | 候选池 |
@@ -259,10 +259,40 @@ Agent 使用四阶段流程：
 ### 监控循环与 Agent 互斥
 监控循环（`chat_monitor_loop`）和 Agent 端点（`/api/agent/run`）共享 `asyncio.Lock`（`browser_sync_lock`），同一事件循环内互斥执行。Agent 持有锁期间监控循环阻塞，反之亦然。监控循环在风控冷却期间心跳和保活照常执行（防止 session 超时），仅跳过 `run_chat_monitor_cycle` 高风险操作。监控日志完整记录每轮耗时、扫描会话数、新消息数、回复数。
 
+监控循环关键流程：
+1. DOM 扫描聊天列表 → 匹配 DB 会话 → 检测未回复消息 → AI 生成回复 → 发送
+2. 单轮最多回复 3 条（`_MAX_REPLIES_THIS_CYCLE`），先同步全部消息，再回复前 3 条
+3. 回复延迟优化：`_human_pace` 放在 AI 生成**之后**，思考延迟 `random(1,3)+len*0.03(max3)`，发送后暂停 `pause(2,5)`
+
+### 未读消息双重检测（DOM + DB 兜底）
+DOM 扫描有时会遗漏未读消息（如页面刚加载、会话列表渲染不完整、名称匹配失败），因此增加数据库层面的兜底检测：
+
+**DB 层（`has_unreplied` 字段）**：
+- `conversations` 表新增 `has_unreplied` 字段（INTEGER DEFAULT 0），在 `replace_conversation_messages()` 时自动计算：从最后一条非系统 HR 消息向前搜索，如果之后没有 "me" 的回复则标记为 1
+- `add_message()` 中当 sender="me" 时自动将 `has_unreplied` 置为 0
+- `list_unreplied_conversations()` 查询 `has_unreplied=1 AND status='active' AND auto_reply_enabled=1` 的会话
+
+**监控循环兜底流程**：
+1. DOM 扫描处理时，将已处理的会话 ID 记入 `_processed_conv_ids` 集合
+2. DOM 扫描完成后，调用 `list_unreplied_conversations()` 查询 DB 中标记为未回复的会话
+3. 排除 `_processed_conv_ids` 中已处理的，剩余即为 DOM 遗漏的会话
+4. 按会话名称打开聊天页 → 读取消息 → 生成回复 → 发送（同样遵守回复上限）
+
+### BOSS 系统简历索取处理
+HR 通过 BOSS 系统发送简历索取请求时（消息内容："我想要一份您的附件简历，您是否同意"，附带 [拒绝] [同意] 按钮），不需要走工具栏发简历弹窗流程：
+- `_click_chat_agree_button()` 使用 `page.evaluate` 注入 JS，在聊天消息区内查找文本为 "同意" 的可点击元素，排除弹窗/对话框内的按钮，直接点击
+- 检测关键词：`"同意" + "是否同意"` 或 `"同意" + "附件简历"` → 点击聊天内同意按钮
+- 仅在未找到同意按钮时，回退到工具栏 `send_resume()` 流程
+
 ### 人类行为模拟
-`BossAutomation` 提供两个辅助方法降低风控风险：
-- `_human_pace(min_gap, max_gap)` — 两次高风险操作间强制随机间隔（投递 10-25s，回复 5-15s）
-- `_human_scroll()` — 模拟人类浏览（随机滚动 1-3 次 + 阅读停留 0.8-2.5s），投递前滚动阅读 JD 后再操作，更符合真人行为模式。滚动后自动 `scrollTo(0,0)` 回顶部，避免 Playwright auto-scroll 触发 BOSS header 动画导致 click 超时。
+`BossAutomation` 提供辅助方法降低风控风险：
+- `_human_pace(min_gap, max_gap)` — 两次高风险操作间强制随机间隔。优化后 `_human_pace` 放在 AI 生成回复**之后**（而非之前），避免 AI 调用耗时 + 固定等待叠加导致的过长延迟
+- `_human_scroll()` — 模拟人类浏览（随机滚动 1-3 次 + 阅读停留 0.8-2.5s），投递前滚动阅读 JD 后再操作。滚动后自动 `scrollTo(0,0)` 回顶部，避免 Playwright auto-scroll 触发 BOSS header 动画导致 click 超时
+
+**回复延迟优化**（`run_chat_monitor_cycle`）：
+- 思考延迟：`random(1, 3) + len(reply)*0.03`（上限 3s），替代原来的 `random(2,5) + len*0.05(max6)`
+- 发送后暂停：`pause(2, 5)`，替代原来的 `pause(5, 15)`
+- 单轮回复上限 3 条（`_MAX_REPLIES_THIS_CYCLE=3`），先全部同步消息，只回复前 3 条，防止单轮耗时过长
 
 ### 投递混合架构（Hybrid Playwright + Injected JS）
 `apply_to_job` 方法采用两阶段策略：
