@@ -2350,6 +2350,19 @@ td a:hover{color:var(--accent)}
           </div>
         </div>
       </div>
+      <!-- 线下面试地点 -->
+      <div class="section"><h3>📍 线下面试地点</h3>
+        <p style="font-size:11px;color:var(--text-3);margin-bottom:8px;">HR要求线下面试时自动提取并分类，按城市分组展示</p>
+        <div id="offlineLocationDashboard">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+            <button class="btn btn-sm btn-primary" onclick="loadOfflineLocations()">🔄 刷新</button>
+            <span id="offlineLoading" style="font-size:11px;color:var(--text-3);display:none;">加载中...</span>
+          </div>
+          <div id="offlineLocationContent" style="font-size:12px;">
+            <span style="color:var(--text-3);">暂无数据，HR回复中提到线下面试时会自动收集</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     </div>
@@ -3962,12 +3975,67 @@ async function loadReviewSessionDetail(sid){
   }
 }
 
+// ══════ 线下面试地点 ══════
+async function loadOfflineLocations(){
+  const loading=document.getElementById('offlineLoading');
+  loading.style.display='inline';
+  try{
+    const resp=await fetch('/api/offline-interview-locations');
+    const d=await resp.json();
+    const grouped=d.grouped||{};
+    const cities=Object.keys(grouped);
+
+    if(!cities.length){
+      document.getElementById('offlineLocationContent').innerHTML=
+        '<span style="color:var(--text-3);">暂无数据，HR回复中提到线下面试时会自动收集</span>';
+      loading.style.display='none';
+      return;
+    }
+
+    let html=`<div style="margin-bottom:8px;color:var(--text-2);">共 <b>${d.total||0}</b> 条记录，分布在 <b>${cities.length}</b> 个城市</div>`;
+    for(const city of cities){
+      const locs=grouped[city];
+      const badgeColor=city==='未分类'?'var(--border)':'var(--accent)';
+      html+=`<div style="margin-bottom:12px;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--border);">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${badgeColor};"></span>
+          <b>${esc(city)}</b>
+          <span style="font-size:11px;color:var(--text-3);">${locs.length} 条</span>
+        </div>`;
+      for(const loc of locs){
+        const company=loc.hr_company||'未知公司';
+        const title=loc.job_title||'未知岗位';
+        const hr=loc.hr_name||'未知HR';
+        const detail=loc.location_detail?`<span style="color:var(--accent);">📍 ${esc(loc.location_detail)}</span>`:'';
+        const msg=loc.hr_message?`<div style="font-size:10px;color:var(--text-3);margin-top:4px;line-height:1.4;">💬 ${esc(loc.hr_message.substring(0,150))}${loc.hr_message.length>150?'…':''}</div>`:'';
+        const repliedTag=loc.replied
+          ?'<span style="font-size:10px;color:var(--green);">✓ 已回复</span>'
+          :'<span style="font-size:10px;color:var(--orange);">○ 待回复</span>';
+        html+=`<div style="padding:8px 12px;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span><b>${esc(company)}</b> · ${esc(title)}</span>
+            ${repliedTag}
+          </div>
+          <div style="font-size:11px;color:var(--text-2);margin-top:2px;">HR: ${esc(hr)} ${detail}</div>
+          ${msg}
+        </div>`;
+      }
+      html+='</div>';
+    }
+    document.getElementById('offlineLocationContent').innerHTML=html;
+  }catch(e){
+    document.getElementById('offlineLocationContent').innerHTML=
+      '<span style="color:var(--red);font-size:11px;">加载失败: '+esc(e.message)+'</span>';
+  }
+  loading.style.display='none';
+}
+
 // 切到知识库/面试回顾 tab 时自动加载
 const _origSwitchTab=switchTab;
 switchTab=function(tab){
   _origSwitchTab(tab);
   if(tab==='kb'){loadKbStats();}
-  if(tab==='review'){loadReviewDashboard();}
+  if(tab==='review'){loadReviewDashboard();loadOfflineLocations();}
 };
 
 </script>

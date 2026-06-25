@@ -2693,6 +2693,23 @@ def api_review_weak_areas(limit: int = 10):
 
 
 # ══════════════════════════════════════
+#  线下面试地点追踪
+# ══════════════════════════════════════
+
+
+@app.get("/api/offline-interview-locations")
+def api_offline_locations():
+    """获取按城市分组的线下面试地点列表。"""
+    try:
+        from boss_state import get_offline_locations_grouped
+        grouped = get_offline_locations_grouped()
+        total = sum(len(v) for v in grouped.values())
+        return {"total": total, "grouped": grouped}
+    except Exception as e:
+        return {"total": 0, "grouped": {}, "error": str(e)}
+
+
+# ══════════════════════════════════════
 #  Agent — ReAct 自主求职智能体
 # ══════════════════════════════════════
 

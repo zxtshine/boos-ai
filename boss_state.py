@@ -3,6 +3,7 @@
 SQLite 数据层 —— 投递记录、聊天消息、设置、每日统计。
 """
 
+import re
 import sqlite3
 import threading
 from datetime import date, datetime
@@ -221,6 +222,22 @@ def init_db():
             city TEXT,
             note TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    # 线下面试地点追踪表
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS offline_interview_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+            hr_name TEXT DEFAULT '',
+            hr_company TEXT DEFAULT '',
+            job_title TEXT DEFAULT '',
+            city TEXT DEFAULT '',
+            location_detail TEXT DEFAULT '',
+            hr_message TEXT DEFAULT '',
+            replied INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
     # 默认设置
@@ -970,6 +987,135 @@ def mark_interview_ended(session_id: str):
         (session_id,),
     )
     db.commit()
+
+
+# ══════════════════════════════════════
+#  线下面试地点追踪
+# ══════════════════════════════════════
+
+# 常见城市列表（用于从消息中提取地点）
+_KNOWN_CITIES = [
+    "上海", "北京", "深圳", "广州", "杭州", "成都", "武汉", "南京", "西安",
+    "重庆", "苏州", "天津", "长沙", "郑州", "东莞", "青岛", "合肥", "佛山",
+    "宁波", "昆明", "沈阳", "大连", "福州", "厦门", "济南", "无锡", "南宁",
+    "长春", "泉州", "贵阳", "南昌", "常州", "太原", "烟台", "嘉兴", "南通",
+    "金华", "珠海", "惠州", "徐州", "海口", "乌鲁木齐", "兰州", "中山",
+    "绍兴", "温州", "潍坊", "哈尔滨", "淄博", "临沂", "台州", "湖州",
+    "芜湖", "镇江", "扬州", "盐城", "泰州", "襄阳", "宜昌", "洛阳",
+]
+
+# 线下面试关键词
+_OFFLINE_INTERVIEW_KEYWORDS = [
+    "线下面试", "线下", "现场面试", "到面", "到场面试", "实地面试", "面对面",
+    "过来面试", "来面试", "到公司面试", "面聊", "见面聊聊", "面谈",
+    "线下面聊", "线下沟通", "实地面聊", "到场", "到公司聊", "当面聊聊",
+    "当面面试", "线下一面", "线下二面", "线下面", "实地", "线下笔试",
+    "来公司", "到司面试", "上门面试", "线下复试", "线下面试地点",
+    "面试地点", "面试地址", "线下面试地址", "线下详聊", "到现场", "公司地址",
+]
+
+
+def _extract_city_from_text(text: str) -> tuple:
+    """从文本中提取城市和地点详情。返回 (city, location_detail)。"""
+    if not text:
+        return ("", "")
+    found_cities = []
+    for city in _KNOWN_CITIES:
+        if city in text:
+            found_cities.append(city)
+    if not found_cities:
+        return ("", "")
+    # 取最后出现的城市（通常是具体地点）
+    city = found_cities[-1]
+    # 尝试提取更具体的地点信息（区/街道/大厦等）
+    detail = ""
+    detail_patterns = [
+        r'(?:在|到|去|地址[：:]?\s*)([一-龥]{2,20}(?:区|路|街|道|镇|园|大厦|广场|中心|楼|层|号))',
+        r'([一-龥]{2,10}(?:区|街道|镇|园区|开发区))',
+        r'(?:地点|地址|位置)[：:]\s*([^\n，。,]{2,50})',
+    ]
+    for pat in detail_patterns:
+        m = re.search(pat, text)
+        if m:
+            detail = m.group(1).strip()
+            break
+    if not detail and len(found_cities) >= 2:
+        detail = found_cities[0]
+    return (city, detail)
+
+
+def _detect_offline_interview_requirement(message: str) -> bool:
+    """检测HR消息是否要求线下面试。"""
+    if not message:
+        return False
+    return any(kw in message for kw in _OFFLINE_INTERVIEW_KEYWORDS)
+
+
+def save_offline_interview_location(
+    conversation_id: int,
+    hr_name: str = "",
+    hr_company: str = "",
+    job_title: str = "",
+    city: str = "",
+    location_detail: str = "",
+    hr_message: str = "",
+) -> int:
+    """保存线下面试地点记录。已存在则更新。返回记录ID。"""
+    db = get_db()
+    # 检查是否已存在相同会话的记录
+    existing = db.execute(
+        "SELECT id FROM offline_interview_locations WHERE conversation_id=?",
+        (conversation_id,),
+    ).fetchone()
+    if existing:
+        db.execute(
+            """UPDATE offline_interview_locations
+               SET hr_name=?, hr_company=?, job_title=?, city=?,
+                   location_detail=?, hr_message=?, updated_at=CURRENT_TIMESTAMP
+               WHERE id=?""",
+            (hr_name, hr_company, job_title, city, location_detail, hr_message, existing["id"]),
+        )
+        db.commit()
+        return existing["id"]
+    cur = db.execute(
+        """INSERT INTO offline_interview_locations
+           (conversation_id, hr_name, hr_company, job_title, city, location_detail, hr_message)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (conversation_id, hr_name, hr_company, job_title, city, location_detail, hr_message),
+    )
+    db.commit()
+    return cur.lastrowid
+
+
+def list_offline_interview_locations() -> list:
+    """获取所有线下面试地点，按城市分组排序。"""
+    rows = get_db().execute(
+        """SELECT * FROM offline_interview_locations
+           ORDER BY city, updated_at DESC"""
+    ).fetchall()
+    return _rows_to_list(rows)
+
+
+def get_offline_locations_grouped() -> dict:
+    """获取按城市分组的线下面试地点。"""
+    locations = list_offline_interview_locations()
+    grouped = {}
+    for loc in locations:
+        city = loc.get("city", "") or "未分类"
+        if city not in grouped:
+            grouped[city] = []
+        grouped[city].append(loc)
+    # 按每个城市的记录数降序排列
+    return dict(sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True))
+
+
+def mark_offline_location_replied(location_id: int):
+    """标记线下面试地点记录已回复。"""
+    get_db().execute(
+        "UPDATE offline_interview_locations SET replied=1, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (location_id,),
+    )
+    get_db().commit()
 
 
 # 启动时初始化

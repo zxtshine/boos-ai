@@ -2448,6 +2448,7 @@ class BossAutomation(BossScraper):
                     job_title = matched_conv.get("job_title", "")
                     job_company = matched_conv.get("hr_company", "")
                     job_desc = ""
+                    app = None
                     app_id = matched_conv.get("application_id")
                     if app_id:
                         from boss_state import get_application
@@ -2462,10 +2463,30 @@ class BossAutomation(BossScraper):
                         "title": job_title,
                         "company": job_company,
                         "description": job_desc,
+                        "city": app.get("city", "") if app else "",
                     }
                     style = get_setting("ai_reply_style", "professional")
                     resume = get_setting("resume_summary", "")
                     wechat = get_setting("wechat_id", "")
+
+                    # 检测线下面试要求并记录
+                    from boss_state import _detect_offline_interview_requirement, _extract_city_from_text
+                    from boss_state import save_offline_interview_location
+                    if _detect_offline_interview_requirement(unreplied_hr_msg):
+                        city, detail = _extract_city_from_text(unreplied_hr_msg)
+                        # 如果消息里没提取到城市，尝试从岗位信息取
+                        if not city:
+                            city = job_info.get("city", "")
+                        save_offline_interview_location(
+                            conv_id,
+                            hr_name=matched_conv.get("hr_name", ""),
+                            hr_company=matched_conv.get("hr_company", ""),
+                            job_title=job_title,
+                            city=city,
+                            location_detail=detail,
+                            hr_message=unreplied_hr_msg,
+                        )
+                        print(f"  [监控] 检测到线下面试要求 → 城市: {city or '未识别'} 详情: {detail or '无'}")
 
                     gen = generate_reply(conv_id, unreplied_hr_msg, job_info, style, resume, wechat)
                     reply = gen["reply"]
@@ -2719,6 +2740,7 @@ class BossAutomation(BossScraper):
                     job_title_db = db_conv.get("job_title", "")
                     job_company_db = db_conv.get("hr_company", "")
                     job_desc_db = ""
+                    app_db = None
                     app_id_db = db_conv.get("application_id")
                     if app_id_db:
                         try:
@@ -2734,11 +2756,32 @@ class BossAutomation(BossScraper):
                         "title": job_title_db,
                         "company": job_company_db,
                         "description": job_desc_db,
+                        "city": app_db.get("city", "") if app_db else "",
                     }
                     style_db = get_setting("ai_reply_style", "professional")
                     resume_db = get_setting("resume_summary", "")
                     wechat_db = get_setting("wechat_id", "")
                     try:
+                        # 检测线下面试要求并记录（DB兜底）
+                        from boss_state import _detect_offline_interview_requirement as _detect_off, _extract_city_from_text as _extract_city
+                        from boss_state import save_offline_interview_location as _save_offline_loc
+                        if _detect_off(unreplied_db):
+                            _city_db, _detail_db = _extract_city(unreplied_db)
+                            if not _city_db:
+                                _job_city_db = job_info_db.get("city", "")
+                                if _job_city_db:
+                                    _city_db = _job_city_db
+                            _save_offline_loc(
+                                conv_id_db,
+                                hr_name=db_conv.get("hr_name", ""),
+                                hr_company=db_conv.get("hr_company", ""),
+                                job_title=job_title_db,
+                                city=_city_db,
+                                location_detail=_detail_db,
+                                hr_message=unreplied_db,
+                            )
+                            print(f"  [监控] DB兜底 检测到线下面试要求 → 城市: {_city_db or '未识别'}")
+
                         from boss_replier import generate_reply
                         gen_db = generate_reply(conv_id_db, unreplied_db, job_info_db, style_db, resume_db, wechat_db)
                         reply_db = gen_db.get("reply", "")
