@@ -101,12 +101,29 @@ def llm_chat_ollama(messages: list, system_prompt: Optional[str] = None, tempera
         "stream": False,
     }
 
-    resp = httpx.post(f"{OLLAMA_BASE}/api/chat", json=payload, timeout=120)
+    # 估算输入 token
+    _total_chars = sum(len(m.get("content", "")) for m in messages)
+    _est_tokens = int(_total_chars / 2.5)
+    _api_url = f"{OLLAMA_BASE}/api/chat"
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 发送请求 → {_api_url} (估算 ~{_est_tokens} input tokens)")
+
+    _t_req = time.time()
+    try:
+        resp = httpx.post(_api_url, json=payload, timeout=120)
+        _req_elapsed = time.time() - _t_req
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 响应已收到 (status={resp.status_code}, 网络耗时={_req_elapsed*1000:.0f}ms)")
+    except httpx.ConnectTimeout:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ollama 连接超时，请确认 Ollama 是否在 {OLLAMA_BASE} 运行")
+        raise
+    except httpx.ReadTimeout:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Ollama 响应超时（120s），模型可能过载或 prompt 过长")
+        raise
+
     resp.raise_for_status()
     data = resp.json()
     elapsed = time.time() - t0
     result = data["message"]["content"]
-    print(f"[LLM OUTPUT] ({len(result)} chars, {elapsed*1000:.0f}ms):")
+    print(f"[LLM OUTPUT] ({len(result)} chars, 总耗时{elapsed*1000:.0f}ms, 生成耗时{(elapsed - _req_elapsed)*1000:.0f}ms):")
     print(result[:2000] if len(result) > 2000 else result)
     if len(result) > 2000:
         print(f"... [截断，原{len(result)}字符]")
@@ -143,19 +160,40 @@ def llm_chat_deepseek(messages: list, system_prompt: Optional[str] = None, tempe
         "stream": False,
     }
 
+    # 估算 payload 大小和 token 数（粗略：1 token ≈ 4 字符 for 中文, 1 token ≈ 0.75 词 for 英文）
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    payload_kb = len(payload_json.encode("utf-8")) / 1024
+    # 粗略估算输入 token（中文为主的混合文本）
+    _total_chars = sum(len(m.get("content", "")) for m in messages)
+    _est_tokens = int(_total_chars / 2.5)
+    _api_url = f"{cfg['base_url']}/chat/completions"
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 发送请求 → {_api_url}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]    Payload: {payload_kb:.1f}KB, 估算 ~{_est_tokens} input tokens, model={cfg['model']}")
+
     _timeout = httpx.Timeout(120.0, connect=15.0)
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 正在发送 API 请求...")
-    resp = httpx.post(
-        f"{cfg['base_url']}/chat/completions",
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {cfg['api_key']}",
-            "Content-Type": "application/json",
-        },
-        timeout=_timeout,
-        verify=False,
-    )
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 API 响应已收到 (status={resp.status_code})")
+    _t_req = time.time()
+    try:
+        resp = httpx.post(
+            _api_url,
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {cfg['api_key']}",
+                "Content-Type": "application/json",
+            },
+            timeout=_timeout,
+            verify=False,
+        )
+        _req_elapsed = time.time() - _t_req
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 📡 响应已收到 (status={resp.status_code}, 网络耗时={_req_elapsed*1000:.0f}ms)")
+    except httpx.ConnectTimeout:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 连接超时（15s内无法连接到 {_api_url}），请检查网络或 API 地址")
+        raise
+    except httpx.ReadTimeout:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 读取超时（120s内未收到完整响应），服务端可能过载或 prompt 过长")
+        raise
+    except httpx.TimeoutException as te:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ 请求超时: {te}")
+        raise
     resp.raise_for_status()
     data = resp.json()
     elapsed = time.time() - t0
