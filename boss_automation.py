@@ -4,6 +4,7 @@ BossAutomation — 继承 BossScraper，增加点击/输入/聊天等交互能�
 """
 
 import json
+import os
 import random
 import re
 import time
@@ -25,6 +26,7 @@ from boss_state import (
     add_message,
     get_messages,
     get_recent_messages,
+    mark_resume_sent,
     replace_conversation_messages,
     message_exists,
     update_conversation_last_message,
@@ -1249,6 +1251,56 @@ class BossAutomation(BossScraper):
         print(f"  ⚠️ securityId 获取失败（3次重试），HR: {hr_name}")
         return ""
 
+    def _chat_area_text(self) -> str:
+        """只取当前聊天消息区的文本，排除左侧会话列表/页面杂项。
+
+        与消息读取逻辑保持一致：只保留视口右 35% 以内的消息元素。
+        关键：避免其他会话在左侧列表里的简历回执（"已发送/已查看"）污染
+        发送确认检测，造成"没点成就误判成功"的假成功。
+        """
+        try:
+            return self.page.evaluate("""() => {
+                const vw = window.innerWidth;
+                const isVisible = el => {
+                    const r = el.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) return false;
+                    const s = getComputedStyle(el);
+                    return s.display !== 'none' && s.visibility !== 'hidden';
+                };
+                const inChatArea = el => {
+                    const r = el.getBoundingClientRect();
+                    return r.left + r.width / 2 >= vw * 0.35;
+                };
+                const parts = [];
+                document.querySelectorAll('li.message-item, li[class*="message-item"]').forEach(el => {
+                    if (isVisible(el) && inChatArea(el)) parts.push(el.innerText || '');
+                });
+                if (parts.length === 0) {
+                    document.querySelectorAll('[class*="message"] [class*="bubble"], [class*="msg"] [class*="bubble"], [class*="chat"] [class*="text"]').forEach(el => {
+                        if (isVisible(el) && inChatArea(el)) parts.push(el.innerText || '');
+                    });
+                }
+                return parts.join('\\n');
+            }""")
+        except Exception:
+            return ""
+
+    def _wait_resume_confirmed(self, before: str = "", timeout: float = 6.0) -> bool:
+        """点击发送后轮询聊天区，等 BOSS 系统回执出现。
+
+        只扫描聊天消息区（排除左侧会话列表），且 `before` 也取同一区域，
+        避免其他会话在侧边栏里的"已发送/已查看"回执被误判为本会话发送成功。
+        """
+        markers = ("已发送给Boss", "对方已同意，您的附件简历已发送给对方", "点击预览附件简历")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            now = self._chat_area_text()
+            for mk in markers:
+                if mk in now and mk not in before:
+                    return True
+            time.sleep(0.5)
+        return False
+
     def _click_chat_agree_button(self) -> bool:
         """在聊天消息区内点击BOSS系统简历索取的「同意」按钮。
 
@@ -1256,34 +1308,52 @@ class BossAutomation(BossScraper):
             "我想要一份您的附件简历，您是否同意"
             下面有两个按钮: [拒绝] [同意]
         只需要点击「同意」即可，不需要走工具栏发简历弹窗流程。
+        点击后用 _wait_resume_confirmed 校验系统回执，未确认不算成功。
         """
         try:
-            result = self.page.evaluate("""() => {
-                // 在消息列表里找所有可见元素中文本精确为"同意"的可点击元素
-                const all = document.querySelectorAll('span, button, div, a');
-                for (const el of all) {
-                    const txt = (el.innerText || el.textContent || '').trim();
-                    if (txt === '同意' && el.offsetParent !== null) {
-                        // 排除弹窗/对话框里的"同意"
-                        if (el.closest('.dialog, .popup, .modal, [class*="dialog"], [class*="popup"], [class*="modal"]')) {
-                            continue;
-                        }
-                        el.click();
-                        return true;
-                    }
+            before = self._chat_area_text()
+        except Exception:
+            before = ""
+        try:
+            clicked = self.page.evaluate("""() => {
+                // 1) 找文本同时含「附件简历」+「是否同意」的可见消息块（<300字，避免命中整个聊天面板），点它内部的「同意」
+                const blocks = document.querySelectorAll('div, li, [class*="msg"], [class*="sentence"], [class*="item"], [class*="content"]');
+                for (const blk of blocks) {
+                    const t = (blk.innerText || '').trim();
+                    if (!t.includes('附件简历') || !t.includes('是否同意')) continue;
+                    if (t.length > 300 || blk.offsetParent === null) continue;
+                    const btn = Array.from(blk.querySelectorAll('button, span, a, div, p')).find(b => {
+                        const bt = (b.innerText || b.textContent || '').trim();
+                        return bt === '同意' && b.offsetParent !== null;
+                    });
+                    if (btn) { btn.click(); return true; }
                 }
-                // 兜底：匹配包含「同意」且文本较短的按钮
+                // 2) 兜底：点最后一个可见「同意」（通常是最新的系统请求）
+                const cands = [];
+                const nodes = document.querySelectorAll('button, span, a, div, p');
+                for (const el of nodes) {
+                    const txt = (el.innerText || el.textContent || '').trim();
+                    if (txt !== '同意' || el.offsetParent === null) continue;
+                    if (el.closest('.dialog, .popup, .modal, [class*="dialog"], [class*="popup"], [class*="modal"]')) continue;
+                    cands.push(el);
+                }
+                const target = cands[cands.length - 1];
+                if (target) { target.click(); return true; }
+                // 3) 「同意发送」文本按钮
                 const btns = document.querySelectorAll('button, [class*="btn"], [role="button"]');
                 for (const b of btns) {
                     const txt = (b.innerText || '').trim();
-                    if ((txt === '同意' || txt === '同意发送') && b.offsetParent !== null) {
-                        b.click();
-                        return true;
-                    }
+                    if (txt === '同意发送' && b.offsetParent !== null) { b.click(); return true; }
                 }
                 return false;
             }""")
-            return bool(result)
+            if not clicked:
+                print(f"  ⚠️ _click_chat_agree_button: 未找到「同意」按钮")
+                return False
+            print(f"  [发简历] 已点击「同意」按钮，等待系统回执...")
+            ok = self._wait_resume_confirmed(before=before, timeout=6.0)
+            print(f"  [发简历] 系统回执{'已确认' if ok else '未出现，视为失败'}")
+            return ok
         except Exception as e:
             print(f"  ⚠️ _click_chat_agree_button 异常: {e}")
             return False
@@ -1498,34 +1568,63 @@ class BossAutomation(BossScraper):
             for _sel_attempt in range(10):
                 try:
                     _sel_result = self.page.evaluate(
-                        """() => {
-                            const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"], [class*="modal"]');
-                            for (const dlg of dlgs) {
-                                if (dlg.offsetParent === null) continue;
-                                const radios = dlg.querySelectorAll('input[type="radio"], input[type="checkbox"]');
-                                for (const r of radios) {
-                                    if (r.offsetParent !== null && !r.checked) {
-                                        const label = r.closest('label') || r.parentElement;
-                                        if (label) { label.click(); return {ok: true, method: 'radio'}; }
-                                    }
-                                }
-                                const items = dlg.querySelectorAll('li, .resume-item, [class*="resume"], [class*="item"]');
-                                for (const item of items) {
-                                    const txt = (item.innerText || '').trim();
-                                    if ((txt.includes('在线简历') || txt.includes('附件简历')) && item.offsetParent !== null) {
-                                        item.click();
-                                        return {ok: true, method: 'resume-item', txt: txt.slice(0, 30)};
-                                    }
+                        """async () => {
+                            const vis = (el) => el && el.offsetParent !== null;
+                            const sendSel = 'button[type="send"], button[class*="send"], .btn-sure-v2, [class*="btn-send"]';
+                            const isSendEnabled = () => {
+                                const b = document.querySelector(sendSel);
+                                return b && !(b.disabled || b.getAttribute('aria-disabled') === 'true' || /(^|\\s)disabled(\\s|$)/.test(b.className || ''));
+                            };
+                            if (isSendEnabled()) return {ok: true, method: 'already-enabled'};
+                            const nativeClick = (el) => {
+                                const r = el.getBoundingClientRect();
+                                const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                                ['mousedown','mouseup','click'].forEach(n => el.dispatchEvent(new MouseEvent(n, {
+                                    bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0
+                                })));
+                            };
+                            // 以发送按钮为锚点，向上找弹窗容器（避免误点导航「简历」菜单）
+                            const sendBtn = document.querySelector(sendSel);
+                            let container = null;
+                            if (sendBtn) {
+                                let el = sendBtn;
+                                while (el && el !== document.body) {
+                                    el = el.parentElement;
+                                    if (!el || !vis(el)) continue;
+                                    if (/dialog|popup|modal|layer|panel|resume|send|choose|box/.test(el.className || '')) container = el;
                                 }
                             }
-                            const allRadios = document.querySelectorAll('input[type="radio"]:checked, input[type="checkbox"]:checked');
-                            for (const r of allRadios) {
-                                const txt = (r.closest('label')?.innerText || r.parentElement?.innerText || '').trim();
-                                if (txt.includes('简历')) {
-                                    return {ok: true, method: 'already-checked', txt: txt.slice(0, 30)};
+                            const scope = container || document.body;
+                            const candidates = [];
+                            const seen = new Set();
+                            const push = (el, method) => { if (el && !seen.has(el)) { seen.add(el); candidates.push({el, method}); } };
+                            // 1) 未勾选的 radio/checkbox
+                            for (const r of scope.querySelectorAll('input[type="radio"], input[type="checkbox"]')) {
+                                if (vis(r) && !r.checked) {
+                                    const label = r.closest('label') || r.parentElement;
+                                    const txt = ((label?.innerText) || '').trim();
+                                    if (txt.includes('在线简历') || txt.includes('附件简历') || txt.includes('简历')) push(label || r, 'radio');
                                 }
                             }
-                            return {ok: false};
+                            // 2) 明确含「在线简历/附件简历」的可点击项
+                            for (const it of scope.querySelectorAll('li, [class*="resume"], [class*="item"], [class*="option"]')) {
+                                const txt = (it.innerText || '').trim();
+                                if (vis(it) && (txt.includes('在线简历') || txt.includes('附件简历'))) push(it, 'item');
+                            }
+                            // 3) 宽松匹配：短文本含「简历」
+                            for (const it of scope.querySelectorAll('li, [class*="resume"], [class*="item"], [class*="option"]')) {
+                                const txt = (it.innerText || '').trim();
+                                if (vis(it) && txt.includes('简历') && txt.length <= 40 && it.children.length <= 3) push(it, 'item-loose');
+                            }
+                            let tried = 0;
+                            for (const c of candidates) {
+                                if (tried >= 12) break;
+                                tried++;
+                                nativeClick(c.el);
+                                await new Promise(r => setTimeout(r, 400));
+                                if (isSendEnabled()) return {ok: true, method: c.method, txt: (c.el.innerText || '').trim().slice(0, 20)};
+                            }
+                            return {ok: false, tried};
                         }"""
                     )
                     if isinstance(_sel_result, dict) and _sel_result.get("ok"):
@@ -1543,70 +1642,140 @@ class BossAutomation(BossScraper):
             pause(1.5, 2.5)
 
             # 点「发送」按钮（用 JS 原生 click 绕过 chat-op 遮挡）
+            try:
+                _dom_before = self._chat_area_text()
+            except Exception:
+                _dom_before = ""
+            clicked_send = False
             for attempt in range(8):
                 try:
                     confirmed = self.page.evaluate(
                         """() => {
-                            // 直接找弹窗内的发送/确定按钮（不依赖特定 class 组合）
-                            const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"], [class*="modal"]');
+                            const vis = (el) => el && el.offsetParent !== null;
+                            const disabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true' || /(^|\\s)disabled(\\s|$)/.test(el.className || '');
+                            const nativeClick = (el) => {
+                                const r = el.getBoundingClientRect();
+                                const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                                ['mousedown','mouseup','click'].forEach(n => el.dispatchEvent(new MouseEvent(n, {
+                                    bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0
+                                })));
+                            };
+                            const isSendTxt = (t) => t.length > 0 && t.length <= 8 && /发送|投递|确定|确认/.test(t);
+                            // 1) 弹窗内优先（不限元素类型，覆盖 div/span 式按钮）
+                            const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
                             for (const dlg of dlgs) {
-                                if (dlg.offsetParent === null) continue;
-                                const btns = dlg.querySelectorAll('button, .btn, [class*="btn"]');
+                                if (!vis(dlg)) continue;
+                                const btns = dlg.querySelectorAll('button, a, [class*="btn"], [role="button"], div, span');
                                 for (const b of btns) {
-                                    if (b.disabled || b.classList.contains('disabled')) continue;
+                                    if (disabled(b) || !vis(b)) continue;
                                     const txt = (b.innerText || '').trim();
-                                    if (txt === '发送' || txt === '确定' || txt === '确认发送') {
-                                        b.click(); return {ok: true, txt: txt};
+                                    if (isSendTxt(txt)) {
+                                        nativeClick(b); return {ok: true, txt: txt, where: 'dialog'};
                                     }
                                 }
                             }
-                            // 兜底：不限制在弹窗内，找页面上任何可见的发送/确定按钮
-                            const allBtns = document.querySelectorAll('button, .btn, [class*="btn"]');
+                            // 2) 全页兜底：仅限按钮样式的元素
+                            const allBtns = document.querySelectorAll('button, a[class*="btn"], [class*="btn"], [role="button"]');
                             for (const b of allBtns) {
-                                if (b.disabled || b.classList.contains('disabled')) continue;
-                                if (b.offsetParent === null) continue;
+                                if (disabled(b) || !vis(b)) continue;
                                 const txt = (b.innerText || '').trim();
-                                if (txt === '发送') {
-                                    b.click(); return {ok: true, txt: txt, fallback: true};
+                                if (isSendTxt(txt)) {
+                                    nativeClick(b); return {ok: true, txt: txt, where: 'page'};
                                 }
                             }
                             return {ok: false};
                         }"""
                     )
                     if isinstance(confirmed, dict) and confirmed.get("ok"):
-                        pause(0.8, 1.5)
                         print(f"  [发简历] 已点发送按钮 ({confirmed.get('sel') or confirmed.get('txt')})")
-                        return True
+                        clicked_send = True
+                        break
                 except Exception:
                     pass
                 pause(0.8, 1.5)
 
-            # 兜底：用 JS 直接点击发送按钮（绕过 chat-op overlay）
-            try:
-                self.page.evaluate("""() => {
-                    const dlgs = document.querySelectorAll('.choose-resume-dialog, .boss-popup, [class*="dialog"], [class*="popup"]');
-                    for (const dlg of dlgs) {
-                        if (dlg.offsetParent === null) continue;
-                        const btns = dlg.querySelectorAll('button');
-                        for (const b of btns) {
-                            if (b.disabled || b.classList.contains('disabled')) continue;
-                            const txt = (b.innerText || '').trim();
-                            if (txt === '发送' || txt === '确定' || txt === '确认发送') {
-                                b.click();
-                                return true;
+            if not clicked_send:
+                # 兜底：JS 直接点击发送按钮，必须读返回值确认点到了
+                try:
+                    js_ok = self.page.evaluate("""() => {
+                        const vis = (el) => el && el.offsetParent !== null;
+                        const disabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true' || /(^|\\s)disabled(\\s|$)/.test(el.className || '');
+                        const nativeClick = (el) => {
+                            const r = el.getBoundingClientRect();
+                            const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                            ['mousedown','mouseup','click'].forEach(n => el.dispatchEvent(new MouseEvent(n, {
+                                bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0
+                            })));
+                        };
+                        const isSendTxt = (t) => t.length > 0 && t.length <= 8 && /发送|投递|确定|确认/.test(t);
+                        const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
+                        for (const dlg of dlgs) {
+                            if (!vis(dlg)) continue;
+                            const btns = dlg.querySelectorAll('button, a, [class*="btn"], [role="button"], div, span');
+                            for (const b of btns) {
+                                if (disabled(b) || !vis(b)) continue;
+                                const txt = (b.innerText || '').trim();
+                                if (isSendTxt(txt)) { nativeClick(b); return true; }
                             }
                         }
-                    }
-                    return false;
-                }""")
-                pause(0.8, 1.5)
-                print("  [发简历] 已点发送按钮 (JS fallback)")
-                return True
-            except Exception:
-                pass
+                        return false;
+                    }""")
+                    if js_ok:
+                        print("  [发简历] 已点发送按钮 (JS fallback)")
+                        clicked_send = True
+                except Exception:
+                    pass
 
-            print("  [发简历] 无弹窗，按钮已点击但未确认")
-            return True
+            if clicked_send:
+                pause(0.8, 1.5)
+                if self._wait_resume_confirmed(before=_dom_before, timeout=6.0):
+                    print("  [发简历] ✓ 系统已确认简历发送成功")
+                    return True
+                print("  [发简历] ⚠️ 已点发送但未等到系统回执，视为发送失败")
+                return False
+
+            # 诊断：把当前可见弹窗的 DOM 结构 dump 出来，便于下次真实发生时定位选择器
+            try:
+                _dump = self.page.evaluate(
+                    """() => {
+                        const vis = (el) => el && el.offsetParent !== null;
+                        const parts = [];
+                        const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
+                        for (const d of dlgs) {
+                            if (!vis(d)) continue;
+                            const btns = d.querySelectorAll('button, [class*="btn"], a');
+                            const btnTxts = Array.from(btns).filter(b => vis(b)).map(b => (b.innerText || '').trim()).filter(t => t).slice(0, 15);
+                            parts.push('DIALOG<' + d.className + '> btns=[' + btnTxts.join('|') + '] html=' + d.outerHTML.slice(0, 800));
+                        }
+                        if (!parts.length) {
+                            const fixed = document.querySelectorAll('div, [class*="panel"], [class*="box"], [class*="menu"]');
+                            const seen = new Set();
+                            for (const el of fixed) {
+                                if (!vis(el) || el.clientWidth < 50 || el.clientHeight < 30) continue;
+                                const st = getComputedStyle(el);
+                                if (st.position !== 'fixed' && st.position !== 'absolute') continue;
+                                const txt = (el.innerText || '').trim();
+                                if (txt && txt.length < 200 && !seen.has(txt)) {
+                                    seen.add(txt);
+                                    parts.push('OVERLAY<' + el.className + '>: ' + txt.slice(0, 150));
+                                }
+                            }
+                        }
+                        if (!parts.length) parts.push('NO_VISIBLE_DIALOG');
+                        return parts.join('\\n\\n');
+                    }"""
+                )
+                _dump_file = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), ".boss_profile", "send_resume_dialog_dump.log"
+                )
+                with open(_dump_file, "a", encoding="utf-8") as f:
+                    f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n{_dump}\n")
+                print(f"  [发简历] 🔍 弹窗诊断: {(_dump or '')[:1200]}")
+            except Exception as _de:
+                print(f"  [发简历] 弹窗诊断 dump 失败: {_de}")
+
+            print("  [发简历] 未找到可用的发送/确定按钮")
+            return False
         except Exception as e:
             print(f"  ⚠️ send_resume 失败: {e}")
             return False
@@ -2401,8 +2570,15 @@ class BossAutomation(BossScraper):
                     "今日推荐",
                     "该Boss已查看了你的简历",
                     "对方已查看了您的附件简历",
+                    "附件简历请求",
+                    "对方已同意，您的附件简历已发送给对方",
                 )
-                return any(content.startswith(p) for p in patterns)
+                if any(content.startswith(p) for p in patterns):
+                    return True
+                # 发简历相关系统消息（文件名会变，用包含匹配）
+                if "已发送给Boss" in content or "点击预览附件简历" in content:
+                    return True
+                return False
 
             unreplied_hr_msg = None
             for i in range(len(clean_msgs) - 1, -1, -1):
@@ -2497,27 +2673,78 @@ class BossAutomation(BossScraper):
                     if reply:
                         # 先执行发送操作（简历/微信/电话），确保AI说"已发送"时东西已经发出去了
                         msg_lower = unreplied_hr_msg.lower()
+                        _orig_reply = reply  # 保存AI原始回复，防假成功判断不被后续改写的诚实消息污染
 
-                        # 发简历：HR明确要求简历时，且未发送过
-                        if any(kw in msg_lower for kw in ("简历", "cv", "resume")):
+                        def _is_resume_request(text):
+                            """是否 HR 明确索要简历（排除"看了你的简历/简历不匹配"等仅提及）。"""
+                            t = (text or "").lower()
+                            if ("附件简历" in t and "是否同意" in t) or "我想要一份" in t:
+                                return True
+                            if "cv" in t or "resume" in t or "作品集" in t:
+                                return True
+                            if "简历" not in t:
+                                return False
+                            req = ("发一份", "发个", "发下", "发我", "发过来", "发给我", "把简历", "发简历",
+                                   "发送简历", "发送一份", "发份", "一份", "简历发", "简历给", "简历过来",
+                                   "看看简历", "简历看看", "方便发", "简历麻烦", "请发", "先发",
+                                   "简历发一下", "发我一份", "简历发过来",
+                                   "请提供", "提供您的简历", "提供一份简历", "把您的简历", "您的简历发",
+                                   "发份简历", "发一个简历", "简历发我", "简历发一份")
+                            return any(p in t for p in req)
+
+                        # 发简历：HR明确索要简历时，且未发送过
+                        resume_ok = False
+                        if _is_resume_request(unreplied_hr_msg):
                             if not matched_conv.get("resume_sent"):
                                 print(f"  [监控] HR要简历，正在处理...")
-                                # 先判断是不是 BOSS 系统级简历索取（消息里有"同意"按钮）
-                                resume_agreed = False
-                                if "同意" in unreplied_hr_msg and ("是否同意" in unreplied_hr_msg or "附件简历" in unreplied_hr_msg):
+                                # 兜底：聊天历史里已有 BOSS 系统"简历已发送给对方"回执 → 实际已发出，
+                                # 只是 DB resume_sent 未置位（如换会话/重发），避免重复发送或误发"抱歉"
+                                _hist = get_recent_messages(conv_id, limit=50)
+                                _sent_markers = (
+                                    "您的附件简历已发送给对方",
+                                    "附件简历已发送给对方",
+                                    "简历已发送给对方",
+                                    "已查看了您的附件简历",
+                                    "对方已同意，您的附件简历",
+                                )
+                                _already_sent = any(
+                                    any(_m in (m.get("content") or "") for _m in _sent_markers)
+                                    for m in _hist
+                                )
+                                if _already_sent:
+                                    print(f"  [监控] 聊天历史已有简历发送回执，标记 resume_sent，跳过重复发送")
+                                    mark_resume_sent(conv_id)
+                                    resume_ok = True
+                                elif "同意" in unreplied_hr_msg and ("是否同意" in unreplied_hr_msg or "附件简历" in unreplied_hr_msg):
                                     print(f"  [监控] 检测到BOSS系统简历索取，尝试点击聊天内「同意」按钮...")
-                                    resume_agreed = self._click_chat_agree_button()
-                                    if resume_agreed:
+                                    resume_ok = self._click_chat_agree_button()
+                                    if resume_ok:
                                         print(f"  [监控] 已点击同意发送简历")
                                     else:
-                                        print(f"  [监控] 聊天内未找到同意按钮，回退工具栏发简历")
-                                if not resume_agreed:
-                                    resume_agreed = self.send_resume()
-                                if resume_agreed:
-                                    from boss_state import mark_resume_sent
-
+                                        print(f"  [监控] 聊天内未找到/未确认同意，回退工具栏发简历")
+                                if not resume_ok:
+                                    resume_ok = self.send_resume()
+                                if resume_ok:
                                     mark_resume_sent(conv_id)
                                     pause(1, 2)
+                                else:
+                                    print(f"  [监控] ⚠️ 简历发送未确认成功，不置 resume_sent，本轮如实告知")
+                                    reply = "抱歉，刚才尝试通过BOSS官方发送附件简历没有成功，系统没有返回发送成功的回执。麻烦您再发一条\"简历\"或直接点上方的「发简历」，我重新发送一下~"
+
+                        # 防假成功兜底：AI 原始回复声称"已发简历"但上面没触发/没确认发送 → 补发或改话术
+                        if not resume_ok and _orig_reply and "简历" in _orig_reply and not matched_conv.get("resume_sent"):
+                            _claim_markers = ("已通过BOSS", "把简历发给您", "简历已发送", "已发送给您",
+                                              "已把简历发", "简历发给您", "发送给您", "发您了", "发过去了")
+                            if any(_m in _orig_reply for _m in _claim_markers):
+                                print(f"  [监控] ⚠️ AI回复声称已发简历但未确认，尝试补发...")
+                                resume_ok = self.send_resume()
+                                if resume_ok:
+                                    mark_resume_sent(conv_id)
+                                    pause(1, 2)
+                                    print(f"  [监控] 补发成功，已确认发送")
+                                else:
+                                    print(f"  [监控] 补发也未确认成功，如实告知")
+                                    reply = "抱歉，刚才尝试通过BOSS官方发送附件简历没有成功，系统没有返回发送成功的回执。麻烦您再发一条\"简历\"或直接点上方的「发简历」，我重新发送一下~"
 
                         # 换微信：HR主动要联系方式时（排除"保持联系"等模糊表达）
                         wechat_keywords = (

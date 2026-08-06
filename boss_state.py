@@ -788,14 +788,16 @@ def replace_conversation_messages(conversation_id: int, messages: List[dict]):
     _system_prefixes = (
         "你与该职位竞争者PK情况", "竞争力分析", "BOSS安全提示",
         "系统消息", "沟通分析", "今日推荐", "该Boss已查看了你的简历",
-        "对方已查看了您的附件简历",
+        "对方已查看了您的附件简历", "附件简历请求",
+        "对方已同意，您的附件简历已发送给对方",
     )
     _has_unreplied = 0
     for i in range(len(messages) - 1, -1, -1):
         m = messages[i]
         if m.get("sender") != "hr":
             continue
-        if (m.get("content") or "").startswith(_system_prefixes):
+        _c = m.get("content") or ""
+        if _c.startswith(_system_prefixes) or "已发送给Boss" in _c or "点击预览附件简历" in _c:
             continue
         _has_reply = any(
             messages[j].get("sender") == "me"
