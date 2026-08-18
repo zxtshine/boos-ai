@@ -1290,14 +1290,32 @@ class BossAutomation(BossScraper):
 
         只扫描聊天消息区（排除左侧会话列表），且 `before` 也取同一区域，
         避免其他会话在侧边栏里的"已发送/已查看"回执被误判为本会话发送成功。
+
+        收紧判定防"误报成功"：
+        - `before` 可靠（非空）时，任一标记出现且 before 中没有 → 判成功
+        - `before` 为空/不可靠时（可能没抓到聊天区文本），只信强回执
+          （"已发送给Boss"/"对方已同意，您的附件简历..."），且需连续两轮都出现，
+          避免把历史文本或其它区域文本误判成"刚发送成功"
         """
         markers = ("已发送给Boss", "对方已同意，您的附件简历已发送给对方", "点击预览附件简历")
+        strong_markers = ("已发送给Boss", "对方已同意，您的附件简历已发送给对方")
+        reliable_before = bool(before and before.strip())
         deadline = time.time() + timeout
+        consecutive = 0
         while time.time() < deadline:
             now = self._chat_area_text()
-            for mk in markers:
-                if mk in now and mk not in before:
+            if reliable_before:
+                if any(mk in now and mk not in before for mk in markers):
                     return True
+                consecutive = 0
+            else:
+                strong_hit = any(mk in now and mk not in before for mk in strong_markers)
+                if strong_hit:
+                    consecutive += 1
+                    if consecutive >= 2:
+                        return True
+                else:
+                    consecutive = 0
             time.sleep(0.5)
         return False
 
@@ -1316,6 +1334,15 @@ class BossAutomation(BossScraper):
             before = ""
         try:
             clicked = self.page.evaluate("""() => {
+                // 禁用态：卡片已应答/失效时按钮带 disabled，点了也无效，直接跳过
+                const isDisabled = (el) => {
+                    if (!el) return true;
+                    if (el.disabled === true) return true;
+                    const hasD = (e) => String(e.className || '').split(/\\s+/).includes('disabled');
+                    if (hasD(el)) return true;
+                    const anc = el.closest('.card-btn, [class*="btn"], button');
+                    return !!anc && anc !== el && hasD(anc);
+                };
                 // 1) 找文本同时含「附件简历」+「是否同意」的可见消息块（<300字，避免命中整个聊天面板），点它内部的「同意」
                 const blocks = document.querySelectorAll('div, li, [class*="msg"], [class*="sentence"], [class*="item"], [class*="content"]');
                 for (const blk of blocks) {
@@ -1324,16 +1351,16 @@ class BossAutomation(BossScraper):
                     if (t.length > 300 || blk.offsetParent === null) continue;
                     const btn = Array.from(blk.querySelectorAll('button, span, a, div, p')).find(b => {
                         const bt = (b.innerText || b.textContent || '').trim();
-                        return bt === '同意' && b.offsetParent !== null;
+                        return bt === '同意' && b.offsetParent !== null && !isDisabled(b);
                     });
                     if (btn) { btn.click(); return true; }
                 }
-                // 2) 兜底：点最后一个可见「同意」（通常是最新的系统请求）
+                // 2) 兜底：点最后一个可见且未禁用的「同意」（通常是最新的系统请求）
                 const cands = [];
                 const nodes = document.querySelectorAll('button, span, a, div, p');
                 for (const el of nodes) {
                     const txt = (el.innerText || el.textContent || '').trim();
-                    if (txt !== '同意' || el.offsetParent === null) continue;
+                    if (txt !== '同意' || el.offsetParent === null || isDisabled(el)) continue;
                     if (el.closest('.dialog, .popup, .modal, [class*="dialog"], [class*="popup"], [class*="modal"]')) continue;
                     cands.push(el);
                 }
@@ -1660,34 +1687,50 @@ class BossAutomation(BossScraper):
                                     bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0
                                 })));
                             };
-                            const isSendTxt = (t) => t.length > 0 && t.length <= 8 && /发送|投递|确定|确认/.test(t);
+                            // 精确匹配发送/确定文案，避免把"取消确定"等外层容器误点
+                            const isSendTxt = (t) => ['发送', '确定', '确认', '确认发送', '立即发送', '投递'].includes(t);
+                            const isBtnEl = (el) => el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || /(^|[\\s_-])btn/.test(el.className || '');
+                            const isContainer = (el) => !!el.querySelector('button, a[class*="btn"], [role="button"]');
                             // 1) 弹窗内优先（不限元素类型，覆盖 div/span 式按钮）
                             const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
                             for (const dlg of dlgs) {
                                 if (!vis(dlg)) continue;
                                 const btns = dlg.querySelectorAll('button, a, [class*="btn"], [role="button"], div, span');
+                                let cand = null;
                                 for (const b of btns) {
                                     if (disabled(b) || !vis(b)) continue;
+                                    if (isContainer(b)) continue;  // 跳过包裹[取消][确定]的外层容器
                                     const txt = (b.innerText || '').trim();
-                                    if (isSendTxt(txt)) {
-                                        nativeClick(b); return {ok: true, txt: txt, where: 'dialog'};
-                                    }
+                                    if (!isSendTxt(txt)) continue;
+                                    if (!cand || (isBtnEl(b) && !isBtnEl(cand))) cand = b;  // 优先真实按钮
+                                }
+                                if (cand) {
+                                    nativeClick(cand); return {ok: true, txt: (cand.innerText || '').trim(), where: 'dialog', tag: cand.tagName, cls: (cand.className || '').toString().slice(0, 100), html: cand.outerHTML.slice(0, 220)};
                                 }
                             }
                             // 2) 全页兜底：仅限按钮样式的元素
                             const allBtns = document.querySelectorAll('button, a[class*="btn"], [class*="btn"], [role="button"]');
+                            let cand2 = null;
                             for (const b of allBtns) {
                                 if (disabled(b) || !vis(b)) continue;
+                                if (isContainer(b)) continue;
                                 const txt = (b.innerText || '').trim();
-                                if (isSendTxt(txt)) {
-                                    nativeClick(b); return {ok: true, txt: txt, where: 'page'};
-                                }
+                                if (!isSendTxt(txt)) continue;
+                                if (!cand2 || (isBtnEl(b) && !isBtnEl(cand2))) cand2 = b;
+                            }
+                            if (cand2) {
+                                nativeClick(cand2); return {ok: true, txt: (cand2.innerText || '').trim(), where: 'page', tag: cand2.tagName, cls: (cand2.className || '').toString().slice(0, 100), html: cand2.outerHTML.slice(0, 220)};
                             }
                             return {ok: false};
                         }"""
                     )
                     if isinstance(confirmed, dict) and confirmed.get("ok"):
-                        print(f"  [发简历] 已点发送按钮 ({confirmed.get('sel') or confirmed.get('txt')})")
+                        _ident = confirmed.get('tag') or ''
+                        if confirmed.get('cls'):
+                            _ident += f" .{confirmed['cls']}"
+                        print(f"  [发简历] 已点发送按钮 (txt={confirmed.get('txt')!r}, {_ident})")
+                        if confirmed.get('html'):
+                            print(f"  [发简历]   └ 点击元素 html: {confirmed['html']}")
                         clicked_send = True
                         break
                 except Exception:
@@ -1707,21 +1750,31 @@ class BossAutomation(BossScraper):
                                 bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0
                             })));
                         };
-                        const isSendTxt = (t) => t.length > 0 && t.length <= 8 && /发送|投递|确定|确认/.test(t);
+                        const isSendTxt = (t) => ['发送', '确定', '确认', '确认发送', '立即发送', '投递'].includes(t);
+                        const isBtnEl = (el) => el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || /(^|[\\s_-])btn/.test(el.className || '');
+                        const isContainer = (el) => !!el.querySelector('button, a[class*="btn"], [role="button"]');
                         const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
                         for (const dlg of dlgs) {
                             if (!vis(dlg)) continue;
                             const btns = dlg.querySelectorAll('button, a, [class*="btn"], [role="button"], div, span');
+                            let cand = null;
                             for (const b of btns) {
                                 if (disabled(b) || !vis(b)) continue;
+                                if (isContainer(b)) continue;
                                 const txt = (b.innerText || '').trim();
-                                if (isSendTxt(txt)) { nativeClick(b); return true; }
+                                if (!isSendTxt(txt)) continue;
+                                if (!cand || (isBtnEl(b) && !isBtnEl(cand))) cand = b;
+                            }
+                            if (cand) {
+                                nativeClick(cand);
+                                return {ok: true, tag: cand.tagName, cls: (cand.className || '').toString().slice(0, 100), txt: (cand.innerText || '').trim()};
                             }
                         }
-                        return false;
+                        return {ok: false};
                     }""")
-                    if js_ok:
-                        print("  [发简历] 已点发送按钮 (JS fallback)")
+                    if isinstance(js_ok, dict) and js_ok.get("ok"):
+                        _ident = f"{js_ok.get('tag')} .{js_ok.get('cls')}" if js_ok.get('cls') else js_ok.get('tag')
+                        print(f"  [发简历] 已点发送按钮 (JS fallback, txt={js_ok.get('txt')!r}, {_ident})")
                         clicked_send = True
                 except Exception:
                     pass
@@ -1732,9 +1785,11 @@ class BossAutomation(BossScraper):
                     print("  [发简历] ✓ 系统已确认简历发送成功")
                     return True
                 print("  [发简历] ⚠️ 已点发送但未等到系统回执，视为发送失败")
-                return False
+            else:
+                print("  [发简历] 未找到可用的发送/确定按钮")
 
-            # 诊断：把当前可见弹窗的 DOM 结构 dump 出来，便于下次真实发生时定位选择器
+            # 诊断：无论"点错按钮"还是"没找到按钮"，只要未确认成功都 dump，
+            # 便于拿到真实弹窗结构（如"取消确定"外层容器）来定位选择器
             try:
                 _dump = self.page.evaluate(
                     """() => {
@@ -1743,7 +1798,7 @@ class BossAutomation(BossScraper):
                         const dlgs = document.querySelectorAll('[class*="dialog"], [class*="popup"], [class*="modal"], [class*="layer"], [class*="choose"], [class*="resume"], [class*="send"]');
                         for (const d of dlgs) {
                             if (!vis(d)) continue;
-                            const btns = d.querySelectorAll('button, [class*="btn"], a');
+                            const btns = d.querySelectorAll('button, [class*="btn"], a, div, span');
                             const btnTxts = Array.from(btns).filter(b => vis(b)).map(b => (b.innerText || '').trim()).filter(t => t).slice(0, 15);
                             parts.push('DIALOG<' + d.className + '> btns=[' + btnTxts.join('|') + '] html=' + d.outerHTML.slice(0, 800));
                         }
@@ -1774,7 +1829,6 @@ class BossAutomation(BossScraper):
             except Exception as _de:
                 print(f"  [发简历] 弹窗诊断 dump 失败: {_de}")
 
-            print("  [发简历] 未找到可用的发送/确定按钮")
             return False
         except Exception as e:
             print(f"  ⚠️ send_resume 失败: {e}")
@@ -2692,30 +2746,31 @@ class BossAutomation(BossScraper):
                                    "发份简历", "发一个简历", "简历发我", "简历发一份")
                             return any(p in t for p in req)
 
-                        # 发简历：HR明确索要简历时，且未发送过
+                        # 发简历：HR明确索要简历时，先看聊天历史里是否真有发送回执
                         resume_ok = False
-                        if _is_resume_request(unreplied_hr_msg):
-                            if not matched_conv.get("resume_sent"):
+                        _need_resume = _is_resume_request(unreplied_hr_msg)
+                        _hist = get_recent_messages(conv_id, limit=50) if _need_resume else []
+                        _sent_markers = (
+                            "已发送给Boss",
+                            "您的附件简历已发送给对方",
+                            "附件简历已发送给对方",
+                            "简历已发送给对方",
+                            "已查看了您的附件简历",
+                            "对方已同意，您的附件简历",
+                        )
+                        _already_sent = any(
+                            any(_m in (m.get("content") or "") for _m in _sent_markers)
+                            for m in _hist
+                        )
+                        if _need_resume:
+                            if _already_sent:
+                                print(f"  [监控] 聊天历史已有简历发送回执，标记 resume_sent，跳过重复发送")
+                                mark_resume_sent(conv_id)
+                                resume_ok = True
+                            else:
+                                # 即使 DB resume_sent 标记为1，只要历史里没有真实回执（误标/过期）就重新发
                                 print(f"  [监控] HR要简历，正在处理...")
-                                # 兜底：聊天历史里已有 BOSS 系统"简历已发送给对方"回执 → 实际已发出，
-                                # 只是 DB resume_sent 未置位（如换会话/重发），避免重复发送或误发"抱歉"
-                                _hist = get_recent_messages(conv_id, limit=50)
-                                _sent_markers = (
-                                    "您的附件简历已发送给对方",
-                                    "附件简历已发送给对方",
-                                    "简历已发送给对方",
-                                    "已查看了您的附件简历",
-                                    "对方已同意，您的附件简历",
-                                )
-                                _already_sent = any(
-                                    any(_m in (m.get("content") or "") for _m in _sent_markers)
-                                    for m in _hist
-                                )
-                                if _already_sent:
-                                    print(f"  [监控] 聊天历史已有简历发送回执，标记 resume_sent，跳过重复发送")
-                                    mark_resume_sent(conv_id)
-                                    resume_ok = True
-                                elif "同意" in unreplied_hr_msg and ("是否同意" in unreplied_hr_msg or "附件简历" in unreplied_hr_msg):
+                                if "同意" in unreplied_hr_msg and ("是否同意" in unreplied_hr_msg or "附件简历" in unreplied_hr_msg):
                                     print(f"  [监控] 检测到BOSS系统简历索取，尝试点击聊天内「同意」按钮...")
                                     resume_ok = self._click_chat_agree_button()
                                     if resume_ok:
@@ -2731,8 +2786,8 @@ class BossAutomation(BossScraper):
                                     print(f"  [监控] ⚠️ 简历发送未确认成功，不置 resume_sent，本轮如实告知")
                                     reply = "抱歉，刚才尝试通过BOSS官方发送附件简历没有成功，系统没有返回发送成功的回执。麻烦您再发一条\"简历\"或直接点上方的「发简历」，我重新发送一下~"
 
-                        # 防假成功兜底：AI 原始回复声称"已发简历"但上面没触发/没确认发送 → 补发或改话术
-                        if not resume_ok and _orig_reply and "简历" in _orig_reply and not matched_conv.get("resume_sent"):
+                        # 防假成功兜底：AI 原始回复声称"已发简历"但历史无真实回执且未确认发送 → 补发或改话术
+                        if not resume_ok and not _already_sent and _orig_reply and "简历" in _orig_reply:
                             _claim_markers = ("已通过BOSS", "把简历发给您", "简历已发送", "已发送给您",
                                               "已把简历发", "简历发给您", "发送给您", "发您了", "发过去了")
                             if any(_m in _orig_reply for _m in _claim_markers):
